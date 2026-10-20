@@ -1,5 +1,31 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## Branch note: miatoll plan (2026-10-20)
+
+This branch (`miatoll`, not upstream) carries only documentation so far:
+`docs/MIATOLL.md` — the bring-up plan for porting ios-sweet to the Xiaomi
+miatoll family (Redmi Note 9S / 9 Pro / 9 Pro Max / Poco M2 Pro, SM7125
+Snapdragon 720G, Kryo 470 2x A76 + 6x A55). No device has been attached;
+all device dependencies are marked VERIFY there.
+
+Key conclusions for adaptation (facts from the ios-sweet/MakrSas-ios-topaz
+code, guesses marked in the doc): the sweet patch series applies unchanged
+CPU-wise (both miatoll clusters are ARMv8.2 with 16K granule + LSE, no PAC,
+like sweet's; none of topaz's 0080-0082 SM6225 A53/A73 workarounds are
+needed); the device delta is the usual set — shim constants (GIC
+`0x17a00000`/`0x17a60000` expected same-generation, IMEM restart reason,
+PS_HOLD, MPIDR pattern), `tools/mkadt.py` platform values (RAM banks
+4 GB/6 GB+ variants VERIFY from the live FDT, ABL cont-splash FB address
+VERIFY, panel = IPS LCD 1080x2400 without DSC), plus two new driver
+patches (touch IC varies by unit: Goodix/Synaptics/focaltech candidates;
+buttons on a PM6125-class PMIC instead of PM6150). Boot-image packing is
+an open question: sweet packs boot v2, topaz needed v4; the canary is
+booting the unmodified sweet shim image with `fastboot boot`.
+
+Next concrete action (needs the user's device): run the canary sequence in
+`docs/MIATOLL.md` step 1 and fill in the VERIFY values from the shim
+self-test output.
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
