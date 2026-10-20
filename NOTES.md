@@ -577,6 +577,68 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 - Media backup verified twice (host sha list + verified by the user off-box;
   local copies deleted, MANIFEST.sha256 kept in the repo rsync-free area).
 
+### 2026-10-21 TOUCH bring-up: Synaptics TCM @0x20 found, patch 0060 updated (pending CI + flash)
+
+**What the console ring log told us** (pulled via `tools/sweet-log-pull.sh`
+from the last 4 MiB of userdata while in OrangeFox; logs/miatoll-1.bin, 211 KB):
+the touch thread DID start and stopped at exactly one spot:
+    SWEET TOUCH: mapping GCC/TLMM/SE7
+    SWEET TOUCH: gcc vote=0xbc0000 rcg=0x80000000 cfg=0x100000 dfs=0x21
+    SWEET TOUCH: GCC branch 0x18010 halted (0x8000000a)
+i.e. the wrapper1 branch clocks never got enabled. Cause (verified against
+Xiaomi's stock SM7125 "atoll" GCC driver + the live boot.img DTB): on SM7150
+the SE branch enable votes live in GCC 0x5200c, on sm7125/atoll they are in
+**0x52008**. 0xbc0000 was our own vote echoed from the WRONG register; the
+real one had no vote, so 0x18010 (wrap1_s_ahb) stayed halted and the driver
+bailed silently. Everything else matches SM7150 exactly:
+- touch SE7 = GENI I2C at **0x00a84000** (= qupv3_se7_i2c in the DTB),
+  RCG cmd 0x18148, SDA/SCL = TLMM 6/7 (function qup11), irq=TLMM 9,
+  reset=TLMM 8, TLMM NORTH base 0x03900000 — same constants as sweet.
+- touch IC (Xiaomi dtbo overlay, read from the phone's own `dtbo` partition;
+  4 board variants all agree): **Synaptics TCM I2C @ slave 0x20**, irq
+  tlmm 9 level-low, reset tlmm 8, reset-on-state=0, 20 ms active, 200 ms
+  delay. A second backup candidate sits at 0x4a (atmel maxtouch).
+
+**TLMM90 warning**: on miatoll GPIO90 is the goodix *fingerprint* IRQ;
+sweet used it as "board digital power enable" for its touch. The driver
+now only touches gpio90 when the Goodix/Focaltech lineage is selected.
+
+**Patch 0060 updated (miatoll touch support, runtime board-agnostic)**:
+1. `touch_clocks()`: votes written to BOTH 0x52008 (atoll) and 0x5200c
+   (sdmmagpie) — the unused register's polled bits are reserved there.
+2. New Synaptics TouchComm transport built on the same polled GENI SE7
+   FIFO engine: cmd write [cmd][len2 LE][payload], raw reads, 4-byte
+   message header (marker 0xa5) + CONTINUED_READ chunks (each continued
+   chunk re-prefixed 0xa5/0x03), 1-byte 0x5a padding tail, chunked at 62
+   payload bytes.
+3. TCM protocol: CMD_IDENTIFY (0x02) -> mode/part_number[16]/build_id,
+   CMD_GET_APPLICATION_INFO (0x20) -> max_x/max_y/max_objects (offsets
+   32/34/36 LE; status offset 2 == 1 means BOOTING, retried),
+   CMD_GET_TOUCH_REPORT_CONFIG (0x25) -> config-driven rep<ort parser
+   (FOREACH_ACTIVE_OBJECT, INDEX/CLASSIFICATION/X/Y fields, LSB-first
+   bit extraction per the Synaptics reference implementation in
+   kernel/msm synaptics_tcm), CMD_ENABLE_REPORT (0x05), fallback
+   RUN_APPLICATION_FIRMWARE (0x14) if mode == bootloader (0x0b).
+   Finger status: classification 1/2 = down, 0 = lift; x/y 12-bit.
+4. `touch_msg()`: TX path now fills the FIFO word-by-word (allowing
+   payloads up to 64 B, needed for TCM commands), RX word-count sanity
+   cap made dynamic ((nr+7)/4), branch polling unchanged.
+5. Thread: TCM is probed FIRST (read-only identify, no writes to the
+   board ICs, no gpio90). If alive: reset pulse 20 ms low / 300 ms high
+   (per the Synaptics reference reset-on-state=0), app info, report
+   config, then a 10 ms poll loop parsing REPORT_TOUCH (0x11) messages.
+   If dead: the original goodix(0x5d)/focaltech(0x38) probes run
+   unchanged (SM7150 regression-safe).
+Syntax-checked locally (aarch64 clang, -fsyntax-only, stub headers).
+NOTE (open risk): touch power rails (vdd/avdd, PM6150-class LDO) are
+ firmware/static-vote territory — if the IC is unpowered after cold
+ boots there may be nothing at 0x20 and the log will show "no unique
+ supported IC"; then PMIC rail writes become follow-up work.
+Next: commit + push branch miatoll, wait for the CI kernel build,
+ rebuild payload (same mkpayload/mkadt-miatoll flow, bootargs finalu2:
+ sweetfb_noconsole=1 sweetusb=2), fastboot boot, re-pull the console
+ ring and look for "SWEET TOUCH: selected Synaptics".
+
 ## 2026-10-21 MIATOLL: FLASH + FIRST SUCCESSFUL iOS BOOT
 
 - fastboot flash userdata was abandoned (16 GB raw > max-download-size,

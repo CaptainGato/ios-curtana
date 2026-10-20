@@ -217,7 +217,7 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 --- /dev/null
 +++ b/bsd/dev/sweet_touch.c
-@@ -0,0 +1,568 @@
+@@ -0,0 +1,1036 @@
 +/*
 + * SWEET SE7 FIFO I2C / GT9896 Yellowstone / Focaltech 54:52 bring-up.
 + * Call once after the scheduler is running; all work runs on one thread.
@@ -251,6 +251,7 @@
 +#define TOUCH_MAX        10u
 +#define TOUCH_GOODIX     1
 +#define TOUCH_FTS        2
++#define TOUCH_TCM        3
 +
 +#define SE_STATUS       0x040u
 +#define SE_MCLK         0x048u
@@ -339,16 +340,35 @@
 +	touch_wr(st.gpio, off, cfg);
 +}
 +
++/* Drive a GPIO as an output with an explicit latch value. */
++static void
++touch_gpio_out(unsigned pin, bool high, unsigned pull, unsigned drive)
++{
++	uint32_t off = TOUCH_GPIO_CFG(pin);
++	uint32_t io = touch_rd(st.gpio, TOUCH_GPIO_IO(pin)) & ~2u;
++	/* Set the output latch before enabling the output. */
++	touch_wr(st.gpio, TOUCH_GPIO_IO(pin), high ? io | 2u : io);
++	uint32_t cfg = touch_rd(st.gpio, off) & ~0x3ffu;
++	cfg |= pull | (drive << 6) | 0x200u;
++	touch_wr(st.gpio, off, cfg);
++}
++
 +static bool
 +touch_clocks(void)
 +{
-+	/* Vote on only wrapper1 and SE7, preserving other clock users. */
++	/*
++	 * Wrapper1/SE7 branch votes: sdmmagpie (SM7150) hosts them in 0x5200c,
++	 * atoll (SM7125) in 0x52008. Vote on both, preserving other users;
++	 * the polled bits are reserved in the register the SoC does not use.
++	 */
 +	uint32_t mask = (0x0fu << 18) | (1u << 23);
++	touch_wr(st.gcc, 0x52008u, touch_rd(st.gcc, 0x52008u) | mask);
 +	touch_wr(st.gcc, TOUCH_GCC_VOTE, touch_rd(st.gcc, TOUCH_GCC_VOTE) | mask);
 +	uint32_t dfs = touch_rd(st.gcc, TOUCH_RCG + 0x14u);
 +	uint32_t cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
-+	printf("SWEET TOUCH: gcc vote=%#x rcg=%#x cfg=%#x dfs=%#x\n",
-+	    touch_rd(st.gcc, TOUCH_GCC_VOTE), touch_rd(st.gcc, TOUCH_RCG), cfg, dfs);
++	printf("SWEET TOUCH: gcc votes=%#x/%#x rcg=%#x cfg=%#x dfs=%#x\n",
++	    touch_rd(st.gcc, 0x52008u), touch_rd(st.gcc, TOUCH_GCC_VOTE),
++	    touch_rd(st.gcc, TOUCH_RCG), cfg, dfs);
 +	if (dfs & 1u) {
 +		/* SE CLK_SEL=0 selects DFS performance level 0. Do not alter tables. */
 +		cfg = touch_rd(st.gcc, TOUCH_RCG + 0x1cu);
@@ -411,7 +431,7 @@
 +touch_msg(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
 +    unsigned nr, bool stretch)
 +{
-+	if (st.dead || nt > 3 || nr > 90 || (nt && nr) || (!nt && !nr)) {
++	if (st.dead || nt > 64 || nr > 90 || (nt && nr) || (!nt && !nr)) {
 +		return EIO;
 +	}
 +	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
@@ -444,16 +464,18 @@
 +			}
 +			break;
 +		}
-+		if (nt && !sent && (irq & (1u << 30))) {
++		if (sent < nt && (irq & (1u << 30))) {
++			/* TX FIFO fills LSB-first, four smaller words coalesce */
 +			uint32_t word = 0;
-+			for (unsigned j = 0; j < nt; ++j) {
-+				word |= (uint32_t)tx[j] << (8u * j);
++			unsigned todo = nt - sent > 4u ? 4u : nt - sent;
++			for (unsigned j = 0; j < todo; ++j) {
++				word |= (uint32_t)tx[sent + j] << (8u * j);
 +			}
 +			touch_wr(st.se, SE_TX, word);
-+			sent = nt;
++			sent += todo;
 +		}
 +		uint32_t count = touch_rd(st.se, SE_RX_COUNT) & 0x1ffffffu;
-+		if (count > 64) {
++		if (count > ((nr + 7u) >> 2)) {
 +			err = EIO;
 +			break;
 +		}
@@ -637,6 +659,442 @@
 +	return 0;
 +}
 +
++#define TCM_ADDR          0x20u
++#define TCM_MARKER        0xa5u
++#define TCM_MESSAGE_MAX   256u
++#define TCM_CHUNK         64u
++#define TCM_CMD_NONE      0x00u
++#define TCM_CMD_CONTWRITE 0x01u
++#define TCM_CMD_IDENTIFY  0x02u
++#define TCM_CMD_ENABLE_REPORT 0x05u
++#define TCM_CMD_RUN_APP   0x14u
++#define TCM_CMD_GET_APP_INFO   0x20u
++#define TCM_CMD_GET_TOUCH_REPORT_CONFIG 0x25u
++#define TCM_STATUS_IDLE   0x00u
++#define TCM_STATUS_OK     0x01u
++#define TCM_STATUS_BUSY   0x02u
++#define TCM_STATUS_CONTD  0x03u
++#define TCM_STATUS_ERROR  0x0fu
++#define TCM_STATUS_INVALID 0xffu
++#define TCM_REPORT_IDENTIFY 0x10u
++#define TCM_REPORT_TOUCH    0x11u
++#define TCM_REPORT_STATUS   0x1bu
++#define TCM_MODE_APPLICATION 0x01u
++#define TCM_MODE_BOOTLOADER  0x0bu
++/* TouchComm touch report configuration field codes. */
++#define TCM_TOUCH_END 0x00u
++#define TCM_TOUCH_FOREACH_ACTIVE_OBJECT 0x01u
++#define TCM_TOUCH_FOREACH_OBJECT 0x02u
++#define TCM_TOUCH_FOREACH_END 0x03u
++#define TCM_TOUCH_PAD_TO_NEXT_BYTE 0x04u
++#define TCM_TOUCH_TIMESTAMP 0x05u
++#define TCM_TOUCH_OBJECT_N_INDEX 0x06u
++#define TCM_TOUCH_OBJECT_N_CLASSIFICATION 0x07u
++#define TCM_TOUCH_OBJECT_N_X_POSITION 0x08u
++#define TCM_TOUCH_OBJECT_N_Y_POSITION 0x09u
++#define TCM_TOUCH_OBJECT_N_Z 0x0au
++#define TCM_TOUCH_OBJECT_N_X_WIDTH 0x0bu
++#define TCM_TOUCH_OBJECT_N_Y_WIDTH 0x0cu
++#define TCM_TOUCH_OBJECT_N_TX_POSITION_TIXELS 0x0du
++#define TCM_TOUCH_OBJECT_N_RX_POSITION_TIXELS 0x0eu
++#define TCM_TOUCH_0D_BUTTONS_STATE 0x0fu
++#define TCM_TOUCH_GESTURE_DOUBLE_TAP 0x10u
++#define TCM_TOUCH_FRAME_RATE 0x11u
++#define TCM_TOUCH_POWER_IM 0x12u
++#define TCM_TOUCH_CID_IM 0x13u
++#define TCM_TOUCH_RAIL_IM 0x14u
++#define TCM_TOUCH_CID_VARIANCE_IM 0x15u
++#define TCM_TOUCH_NSM_FREQUENCY 0x16u
++#define TCM_TOUCH_NSM_STATE 0x17u
++#define TCM_TOUCH_NUM_OF_ACTIVE_OBJECTS 0x18u
++#define TCM_TOUCH_NUM_OF_CPU_CYCLES_USED_SINCE_LAST_FRAME 0x19u
++
++static struct {
++	uint8_t config[128];
++	unsigned config_len;
++	uint16_t max_objects;
++} tcm;
++
++static uint32_t
++touch_le16(const uint8_t *p)
++{
++	return (uint32_t)p[0] | ((uint32_t)p[1] << 8);
++}
++
++static uint32_t
++touch_le32(const uint8_t *p)
++{
++	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++	    ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++/*
++ * Chunked message read: 4-byte header, then the payload in
++ * CONTINUED_READ pieces, which repeat an 0xa5/0x03 micro-header.
++ */
++static int
++touch_tcm_rdmsg(uint8_t *code, uint8_t *payload, unsigned max, unsigned *plen)
++{
++	uint8_t hdr[4];
++	int err = touch_msg(TCM_ADDR, NULL, 0, hdr, sizeof(hdr), false);
++	if (err) {
++		return err;
++	}
++	if (hdr[0] != TCM_MARKER) {
++		return EIO;
++	}
++	*code = hdr[1];
++	unsigned len = (unsigned)hdr[2] | ((unsigned)hdr[3] << 8);
++	if (len > max) {
++		return EOVERFLOW;
++	}
++	if (len) {
++		unsigned got = 0, total = len + 1; /* payload + padding */
++		while (got < len) {
++			unsigned remaining = total - got;
++			unsigned take = remaining > TCM_CHUNK - 2u ?
++			    TCM_CHUNK - 2u : remaining;
++			if (take == 1u) {
++				/* pure padding tail: Synaptics wants no bus read for it */
++				got += 1;
++				continue;
++			}
++			uint8_t chunk[TCM_CHUNK];
++			err = touch_msg(TCM_ADDR, NULL, 0, chunk, take + 2u, false);
++			if (err) {
++				return err;
++			}
++			if (chunk[0] != TCM_MARKER || chunk[1] != TCM_STATUS_CONTD) {
++				return EIO;
++			}
++			memcpy(payload + got, chunk + 2, take);
++			got += take;
++		}
++	}
++	*plen = len;
++	return 0;
++}
++
++static int
++touch_tcm_write(uint8_t cmd, const uint8_t *payload, unsigned plen)
++{
++	if (plen > TCM_CHUNK - 3u) {
++		return EOVERFLOW;
++	}
++	uint8_t buf[TCM_CHUNK];
++	buf[0] = cmd;
++	buf[1] = (uint8_t)plen;
++	buf[2] = (uint8_t)(plen >> 8);
++	if (plen) {
++		memcpy(buf + 3, payload, plen);
++	}
++	return touch_msg(TCM_ADDR, buf, 3u + plen, NULL, 0, false);
++}
++
++/* Send a command and wait for its STATUS_OK response. */
++static int
++touch_tcm_cmd(uint8_t cmd, const uint8_t *payload, unsigned plen,
++    uint8_t *resp, unsigned max, unsigned *rlen)
++{
++	int err = touch_tcm_write(cmd, payload, plen);
++	if (err) {
++		return err;
++	}
++	for (unsigned i = 0; i < 250; ++i) {
++		uint8_t code;
++		uint8_t msg[TCM_MESSAGE_MAX];
++		unsigned ml = 0;
++		int rc = touch_tcm_rdmsg(&code, msg, sizeof(msg), &ml);
++		if (rc == EOVERFLOW) {
++			/* unexpected oversized async report: skip this poll */
++			touch_wait(5);
++			continue;
++		}
++		if (rc) {
++			touch_wait(5);
++			continue;
++		}
++		if (code == TCM_STATUS_OK) {
++			unsigned n = ml < max ? ml : max;
++			if (n) {
++				memcpy(resp, msg, n);
++			}
++			if (rlen) {
++				*rlen = ml;
++			}
++			return 0;
++		}
++		if (code == TCM_STATUS_ERROR) {
++			return EIO;
++		}
++		touch_wait(5);
++	}
++	return ETIMEDOUT;
++}
++
++static bool
++touch_tcm_identify(bool *app)
++{
++	uint8_t resp[32];
++	unsigned rl = 0;
++	int err = touch_tcm_cmd(TCM_CMD_IDENTIFY, NULL, 0, resp, sizeof(resp), &rl);
++	if (err || rl < 24) {
++		printf("SWEET TOUCH: tcm probe 0x20 err=%d\r\n", err);
++		return false;
++	}
++	char part[17];
++	memcpy(part, resp + 2, 16);
++	part[16] = 0;
++	for (unsigned i = 0; i < 16 && part[i]; ++i) {
++		if ((unsigned char)part[i] < 0x20u) {
++			part[i] = '?';
++		}
++	}
++	printf("SWEET TOUCH: tcm mode=%u part=%s build=%02x:%02x:%02x:%02x packrat=%u\r\n",
++	    resp[1], part, resp[18], resp[19], resp[20], resp[21],
++	    touch_le32(resp + 18));
++	*app = (resp[1] == TCM_MODE_APPLICATION);
++	return true;
++}
++
++static bool
++touch_tcm_appinfo(void)
++{
++	uint8_t resp[64];
++	unsigned rl = 0;
++	for (unsigned i = 0; i < 15; ++i) {
++		rl = 0;
++		int err = touch_tcm_cmd(TCM_CMD_GET_APP_INFO, NULL, 0, resp,
++		    sizeof(resp), &rl);
++		if (!err && rl >= 46) {
++			if (touch_le16(resp + 2) == 1u) { /* APP_STATUS_BOOTING */
++				touch_wait(200);
++				continue;
++			}
++			printf("SWEET TOUCH: tcm panel max-x=%u max-y=%u objects=%u buttons=%u cfg=%u/%u\r\n",
++			    touch_le16(resp + 32), touch_le16(resp + 34),
++			    touch_le16(resp + 36), touch_le16(resp + 38),
++			    touch_le16(resp + 12), touch_le16(resp + 14));
++			tcm.max_objects = (uint16_t)touch_le16(resp + 36);
++			if (tcm.max_objects == 0u || tcm.max_objects > TOUCH_MAX) {
++				tcm.max_objects = TOUCH_MAX;
++			}
++			return true;
++		}
++		touch_wait(100);
++	}
++	printf("SWEET TOUCH: tcm app info failed\r\n");
++	return false;
++}
++
++static bool
++touch_tcm_config(void)
++{
++	uint8_t resp[130];
++	unsigned rl = 0;
++	int err = touch_tcm_cmd(TCM_CMD_GET_TOUCH_REPORT_CONFIG, NULL, 0, resp,
++	    sizeof(resp), &rl);
++	if (err || !rl || rl > sizeof(tcm.config)) {
++		printf("SWEET TOUCH: tcm report config failed err=%d len=%u\r\n",
++		    err, rl);
++		return false;
++	}
++	memcpy(tcm.config, resp, rl);
++	tcm.config_len = rl;
++	printf("SWEET TOUCH: tcm report config %u bytes [%#x,%#x,%#x,%#x,%#x]\r\n",
++	    rl, resp[0], resp[1], resp[2], resp[3], resp[4]);
++	return true;
++}
++
++/* LSB-first bit field from the touch report buffer. */
++static void
++touch_tcm_bits(const uint8_t *rep, unsigned rlen, unsigned off, unsigned bits,
++    unsigned *out)
++{
++	unsigned data = 0, rem = bits, o = off;
++	if (o + bits > rlen * 8u) {
++		*out = 0;
++		return;
++	}
++	while (rem) {
++		unsigned bit = o % 8u, byo = o / 8u;
++		unsigned take = 8u - bit;
++		if (take > rem) {
++			take = rem;
++		}
++		unsigned mask = 0xffu >> (8u - take);
++		data |= ((rep[byo] >> bit) & mask) << (bits - rem);
++		o += take;
++		rem -= take;
++	}
++	*out = data;
++}
++
++/*
++ * Config-driven parser mirroring the Synaptics reference implementation.
++ */
++static int
++touch_tcm_parse(const uint8_t *rep, unsigned rlen)
++{
++	const uint8_t *cfg = tcm.config;
++	unsigned csz = tcm.config_len;
++	int stat[TOUCH_MAX];
++	unsigned ox[TOUCH_MAX], oy[TOUCH_MAX];
++	memset(stat, 0, sizeof(stat));
++	memset(ox, 0, sizeof(ox));
++	memset(oy, 0, sizeof(oy));
++	unsigned idx = 0, off = 0, obj = 0, next = 0, guard = 0;
++	unsigned objects = 0, active_objects = 0;
++	bool active_only = false, have_num = false;
++	for (;;) {
++		if (++guard > 256u) {
++			return EIO;
++		}
++		if (idx >= csz) {
++			return EIO; /* missing TOUCH_END */
++		}
++		uint8_t c = cfg[idx++];
++		if (c == TCM_TOUCH_END) {
++			break;
++		}
++		if (c == TCM_TOUCH_FOREACH_ACTIVE_OBJECT) {
++			obj = 0;
++			next = idx;
++			active_only = true;
++			continue;
++		}
++		if (c == TCM_TOUCH_FOREACH_OBJECT) {
++			obj = 0;
++			next = idx;
++			active_only = false;
++			continue;
++		}
++		if (c == TCM_TOUCH_FOREACH_END) {
++			if (active_only) {
++				if (have_num) {
++					++objects;
++					if (objects < active_objects) {
++						idx = next;
++					}
++				} else if (off < rlen * 8u) {
++					idx = next;
++				}
++			} else {
++				++obj;
++				if (obj < tcm.max_objects) {
++					idx = next;
++				}
++			}
++			continue;
++		}
++		if (c == TCM_TOUCH_PAD_TO_NEXT_BYTE) {
++			off = (off + 7u) & ~7u;
++			continue;
++		}
++		/* value field: [bits] */
++		unsigned bits = cfg[idx++];
++		unsigned data = 0;
++		touch_tcm_bits(rep, rlen, off, bits, &data);
++		off += bits;
++		if (c == TCM_TOUCH_NUM_OF_ACTIVE_OBJECTS) {
++			active_objects = data;
++			have_num = true;
++		} else if (c == TCM_TOUCH_OBJECT_N_INDEX) {
++			obj = data;
++		} else if (c == TCM_TOUCH_OBJECT_N_CLASSIFICATION) {
++			if (obj < TOUCH_MAX && (data == 1u || data == 2u)) {
++				stat[obj] = 1; /* FINGER / GLOVED_FINGER */
++			}
++		} else if (c == TCM_TOUCH_OBJECT_N_X_POSITION) {
++			if (obj < TOUCH_MAX) {
++				ox[obj] = data;
++			}
++		} else if (c == TCM_TOUCH_OBJECT_N_Y_POSITION) {
++			if (obj < TOUCH_MAX) {
++				oy[obj] = data;
++			}
++		}
++		/* every other field is skipped, the offsets already advanced */
++	}
++	uint32_t mask = 0;
++	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++	for (unsigned i = 0; i < TOUCH_MAX; ++i) {
++		if (stat[i]) {
++			mask |= 1u << i;
++			x[i] = (int)ox[i];
++			y[i] = (int)oy[i];
++		}
++	}
++	touch_report(mask, x, y);
++	return 0;
++}
++
++static int
++touch_tcm_poll(void)
++{
++	uint8_t code;
++	uint8_t msg[TCM_MESSAGE_MAX];
++	unsigned plen = 0;
++	int err = touch_tcm_rdmsg(&code, msg, sizeof(msg), &plen);
++	if (err) {
++		return err;
++	}
++	if (code != TCM_REPORT_TOUCH) {
++		if (code == TCM_STATUS_ERROR) {
++			return EIO;
++		}
++		/* statuses, async identify/status reports, diagnostics: skip */
++		return 0;
++	}
++	if (plen == 0 || !tcm.config_len) {
++		return EIO;
++	}
++	return touch_tcm_parse(msg, plen);
++}
++
++/* Full Synaptics bring-up: identify, reset, app mode, config. */
++static bool
++touch_tcm_start(void)
++{
++	bool app = false;
++	if (!touch_tcm_identify(&app)) {
++		return false;
++	}
++	/* Clean state per the TouchComm reference (reset-on-state = 0). */
++	touch_gpio_out(8, false, 0u, 0u);
++	touch_wait(20);
++	touch_gpio_out(8, true, 3u, 3u); /* ts_active: 8 mA, pull-up */
++	touch_wait(300);
++	bool got = false;
++	for (unsigned i = 0; i < 3 && !got; ++i) {
++		got = touch_tcm_identify(&app);
++	}
++	if (!got) {
++		return false;
++	}
++	if (!app) {
++		printf("SWEET TOUCH: tcm mode %u: running application firmware\r\n",
++		    TCM_MODE_BOOTLOADER);
++		if (touch_tcm_write(TCM_CMD_RUN_APP, NULL, 0)) {
++			return false;
++		}
++		touch_wait(700);
++		if (!touch_tcm_identify(&app) || !app) {
++			return false;
++		}
++	}
++	if (!touch_tcm_appinfo() || !touch_tcm_config()) {
++		return false;
++	}
++	/* TouchComm reports are normally on; re-enable defensively. */
++	(void)touch_tcm_write(TCM_CMD_ENABLE_REPORT, NULL, 0);
++	touch_wait(10);
++	st.kind = TOUCH_TCM;
++	printf("SWEET TOUCH: selected Synaptics TCM, poll=10ms irq-hint=%d\r\n",
++	    st.irq_hint);
++	return true;
++}
++
 +static bool
 +touch_se_init(void)
 +{
@@ -710,12 +1168,20 @@
 +	if (!touch_clocks() || !touch_se_init()) {
 +		goto out;
 +	}
-+	printf("SWEET TOUCH: TLMM reset=%#x irq=%#x vdd90=%#x; L11C must be powered by firmware\n",
++	printf("SWEET TOUCH: TLMM reset=%#x irq=%#x io90=%#x\n",
 +	    touch_rd(st.gpio, TOUCH_GPIO_IO(8)), touch_rd(st.gpio, TOUCH_GPIO_IO(9)),
 +	    touch_rd(st.gpio, TOUCH_GPIO_IO(90)));
 +	touch_gpio(6, 1, 0, 0, false); /* qup11 SDA/SCL, 2 mA, no internal pull */
 +	touch_gpio(7, 1, 0, 0, false);
 +	touch_gpio(9, 0, 3, 3, false); /* interrupt input, 8 mA, pull-up */
++	touch_wait(10);
++	/* Synaptics TCM first (miatoll IC): TLMM90 is the fingerprint IRQ
++	 * there, so the legacy compatibility writes happen only when the
++	 * Goodix/Focaltech lineage is actually in use. */
++	if (touch_tcm_start()) {
++		goto polling;
++	}
++	/* legacy sweet-soc route (unchanged) */
 +	touch_gpio(90, 0, 0, 0, true); /* board digital power enable, high */
 +	touch_wait(10);
 +	touch_gpio(8, 0, 3, 3, true);  /* release reset; no reset-low pulse */
@@ -739,11 +1205,13 @@
 +	printf("SWEET TOUCH: selected %s, 1080x2400, poll=10ms irq-hint=%d\n",
 +	    goodix ? "GT9896 Yellowstone" : "Focaltech 54:52", st.irq_hint);
 +	unsigned errors = 0, ticks = 0;
++polling:
 +	while (!st.dead) {
 +		/* Optional IRQ hint still reads every 100ms, and always while down. */
 +		if (!st.irq_hint || st.active || !(touch_rd(st.gpio, TOUCH_GPIO_IO(9)) & 1u) ||
 +		    (++ticks % 10u) == 0) {
-+			int err = st.kind == TOUCH_GOODIX ? touch_goodix() : touch_focaltech();
++			int err = st.kind == TOUCH_GOODIX ? touch_goodix() :
++			    st.kind == TOUCH_TCM ? touch_tcm_poll() : touch_focaltech();
 +			if (err) {
 +				if ((errors++ % 100u) == 0) {
 +					printf("SWEET TOUCH: report err=%d irq=%#x\n", err, st.irq_status);
