@@ -123,6 +123,12 @@ replugs until the gadget fresh-restarts generally land it on EHCI HS.
 The dwc3 "blue" port (5200000.usb) hosts the Android adb gadget at HS
 but fails the fastboot gadget (`Cannot enable`).
 
+**Run 4** (`cpus=8`, same ramdisk): the gold pair came up too —
+`cpu=6 CPU_ON 0x600 rc=0 → came alive`, `cpu=7 CPU_ON 0x700 rc=0 →
+came alive`, `SWEET CPU: 8/8 CPUs initialized, SGI1 verified`,
+`mcache: 8 CPU(s)`. Full Kryo 470 (2x A76 + 6x A55) runs under XNU;
+this exceeds the sweet milestone (which gated at cpus=6).
+
 **Next:** cpus=8 (add the two A76 golds at 0x600/0x700 — legal on
 SM7125, both clusters do 16K+LSE); then UFS / iOS root on userdata
 (requires explicit user confirmation — userdata flash destroys data);

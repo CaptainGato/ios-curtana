@@ -470,6 +470,10 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   (usb4/usb5); bind OHCI for FS fallback, unbind before expecting HS
   chirps; dwc3/OPI (usb1) never hosts the phone fastboot reliably.
 - Canary #3 armed: cpus=6 (six A55s), same RAM-disk init.
+- Canary #3 DONE: 6/6 A55 up via PSCI, PID 1.
+- Canary #4 DONE: cpus=8 — the A76 gold pair (0x600/0x700) also up,
+  `8/8 CPUs initialized, SGI1 verified`, `mcache: 8 CPU(s)`. Full
+  Kryo 470 under XNU on miatoll.
 - Next: UFS/iOS root (needs user permission for userdata flash), touch
   (FTS on spi@a94000), battery.
 
