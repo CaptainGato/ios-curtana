@@ -576,3 +576,36 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   fastboot boot shim/out/shim-boot-final.img. NOTHING ELSE is ever flashed.
 - Media backup verified twice (host sha list + verified by the user off-box;
   local copies deleted, MANIFEST.sha256 kept in the repo rsync-free area).
+
+## 2026-10-21 MIATOLL: FLASH + FIRST SUCCESSFUL iOS BOOT
+
+- fastboot flash userdata was abandoned (16 GB raw > max-download-size,
+  "File is too large to download"; no img2simg headroom on host).
+- Flash route used: phone in Android (Termux sshd), F2FS /data frozen via
+  python ioctl FIFREEZE (0xC0045877, pkg python on termux); remount-ro is
+  NOT possible on MIUI (busy). Freeze blocks all /data writes; ssh survives.
+- Stream-flash: host dd iosroot.img bs=4M | gzip -1 | ssh u0_a248@phone
+  "gzip -dc | su -c dd of=/dev/block/sda18 bs=4M conv=fsync". 16 GiB over
+  LAN at ~11.5 MB/s, ~24 min total, remote dd rc=0 (fsync ok). After the
+  dd the sshd died (frozen fs + wiped userdata) — expected.
+- Boot: hard reset to bootloader (user, power+vol-down), then
+  fastboot boot shim/out/shim-boot-final.img (payload-final.bin,
+  sweetfb_noconsole=1). Apple logo — no panic — but silent; no fb output.
+- Diagnostic boot: repacked same payload WITHOUT sweetfb_noconsole
+  (out/payload-finalc.bin -> shim-boot-finalc.img, console ON) and
+  re-booted. fb console shows:
+    * periodic "SMP --- sample N" stackshot dumps (all tasks),
+    * exec xpcproxy / fairplayd.H2 / bluetoothd respawn loop (known
+      cosmetic crash-loop of two daemons, non-fatal),
+    * backboardd[56] threads parked normally,
+    * SpringBoard[26] slide 0x37150000 mh 0x1029f4000 — RUNNING.
+- RESULT: after ~10 min the panel shows the iOS Lock Screen rendered by
+  SpringBoard (clock, date, camera, charging glyph) ON TOP of the fb
+  console. iOS userland boot on miatoll: SUCCESS via RAM-only
+  fastboot boot + native HFS+ root on userdata.
+- Touch does NOT work (expected): rootfs only carries Apple touch
+  drivers (SPI/h2); miatoll touch is QCOM I2C Synaptics/Goodix — no
+  IOKit driver exists. Future work = real IOKit HID/I2C port.
+- Date shows Wednesday December 31 (no RTC/NTP driver) — cosmetic.
+- Android will NOT boot until userdata is restored (stock MIUI flash
+  or wipe via OrangeFox). RAM-only boot never touches other partitions.
