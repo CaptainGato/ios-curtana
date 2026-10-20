@@ -43,7 +43,41 @@ CPU-feature/topology patches have no equivalent here.
 | Shim consts | IMEM restart reason `0x146aa65c`, PS_HOLD `0x0c264000` |
 | Memory | banks `0x80000000 + 2G`, `0x100000000 + 0xfcc00000`; kernel window `physBase 0xb0000000, memSize 0x4d000000` (above ramdump_fb/cdsp_sec/qseecom, below rmtfs `0xfde01000`) |
 
-## miatoll delta / VERIFY list
+## VERIFIED from the live device (2026-10-20, curtana hwversion 1.94.0)
+
+Data pulled over SSH/Termux (root via KernelSU): stock `boot.img` /
+`dtbo` / `vbmeta` (sha-verified copies in `backup/`), the booted kernel's
+FDT (`dtb/miatoll-live.dtb`, decompiled), `/proc/iomem`, `/proc/cmdline`
+and dmesg.
+
+| Item | miatoll live value | vs sweet |
+| --- | --- | --- |
+| boot header | **v2**, `dtb` present in boot.img (393 KB), cmdline via header | same as sweet — shim `build.sh` works unchanged |
+| GICv3 | `interrupt-controller@17a00000`, GICR `0x17a60000`, stride `0x20000`, maintenance PPI 9 (`0x09`) | **identical** |
+| CPUs | 8x `arm,armv8`, reg = `0x0,0x100,...,0x700` (Aff1 = n, Aff0 = 0) = **MPIDR n<<8** — exactly what shim's `CPU_ON (i<<8)` sends; capacity: cpu0-5 = A55, cpu6-7 = A76 | same MPIDR shape as sweet |
+| Memory node | `<0x80000000 0x3dd00000>`, `<0xc0000000 0xc0000000>` (~4 GB total) | upper bank = clean 3 GB |
+| Reserved-memory | all carve-outs <= `0x9f400000` (splash `0x9c000000+0x1700000`, ramoops `0x9d800000+0x400000`, qseecom `0x82200000+0x2200000`, mpss `0x86000000+0x8400000`, etc.) — **nothing above `0xc0000000`** | → kernel window `physBase 0xc0000000, memSize 0xc0000000` is clean |
+| `/proc/iomem` System RAM | big run `c0000000-17fffffff`, lower bank fragmented (`80600000`, `80840000`, `84400000-85ffffff`, `93b17000-9dffffff`, `a1200000-bdcfffff`) | confirms the window |
+| Framebuffer | ABL splash **`0x9c000000`**, 1080x2400, stride 4320 (1080*4), a8r8g8b8 (mainline dts says a8r8g8b8; `reserved-memory` cont_splash is `0x9c000000+0x1700000`) | **byte-identical to sweet (same address + same splash size!)** |
+| IMEM | `qcom,msm-imem@146aa000`, restart_reason @ **`0x146aa65c`** | **identical** |
+| PS_HOLD | `restart@c264000` (`pshold-base 0xc264000`) | **identical** |
+| UFS host | `ufshc@1d84000` (`androidboot.boot_devices=soc/1d84000.ufshc`) | **identical** |
+| serial console | `console=ttyMSM0,115200n8 earlycon=msm_geni_serial,0xa88000` | same |
+| ABL state | `androidboot.verifiedbootstate=green`, vbmeta flags 0 — verified boot NOT disabled; `fastboot boot` path is unchanged by that but the first boot is the real canary |
+| Touch | **FocalTech FTS over SPI** on `spi@a94000` (QUP1 SE5), compatible `"focaltech,fts"` + `"novatek,NVT-ts-spi"` (dual-IC node, this unit runs FTS per dmesg `[FTS_TS]`), rst/irq GPIO 8/9, `touch_vddio`/`touch_lab`/`touch_ibb` supplies | different from sweet (Goodix I2C) — port FTS-SPI later |
+| Panel | `dsi_nt36672c_huaxing_fhd_video_display` (Novatek NT36672C, Huaxing, video mode) per `androidboot.lcmtype`; alternatives in dtbo: `ft8756_huaxing_vid`, `nt36675_tianma` | panel driver not needed while ABL splash is reused |
+| Buttons | PM6150/PM6150L (mainline dts: vol-up `pm6150l_gpios 2`, vol-down `pm6150_resin`) — same PMIC pair as sweet | to be probed |
+| ROM kernel | 4.14.203 (custom "ArtixV4"), permissive build | irrelevant to XNU, but eases pulls |
+
+**Conclusion:** the sweet shim needs **zero changes** for miatoll (GIC,
+IMEM, PS_HOLD, UFS, CPU_ON pattern and framebuffer all match
+byte-for-byte). `tools/mkadt-miatoll.py` differs from `mkadt.py`
+only in the memory window (0xc0000000+0xc0000000 via `--highmem`),
+SM7125 compatible string and synthetic ECID. QEMU smoke with the
+miatoll ADT passed (research/qemu-run-miatoll-adt/, no panic, Skywalk
+PASSED).
+
+## miatoll delta / VERIFY list (remaining)
 
 ### 1. CPUs (shim.c, mkadt.py)
 
