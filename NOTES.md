@@ -460,6 +460,30 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 - Debug: xnu patch 0003 sweet-fbcon = kprintf drawn on the framebuffer (ADT node "sweet-fbcon").
 - ADT /arm-io ranges must not map to parent 0 (pe_arm_get_soc_base_phys()==0 disables serial): use parent 0x1000000.
 
+## Status 2026-10-20: miatoll ADT verified, canary image built
+- Live facts from the phone (SSH/Termux, KernelSU root, curtana hw 1.94.0):
+  boot header v2, GIC/IMEM/PS_HOLD/UFS/FB/MPIDR all **byte-identical to
+  sweet** (table in docs/MIATOLL.md). Shim needs zero changes.
+- Memory window: physBase 0xc0000000 memSize 0xc0000000 (clean 3 GB
+  upper bank; every vendor carve-out is below 0x9f400000).
+- tools/mkadt-miatoll.py committed (diff vs mkadt.py: memory, SM7125
+  compatible, ECID 'MIATOLL'). QEMU smoke with miatoll ADT: no panic,
+  Skywalk PASSED (research/qemu-run-miatoll-adt/).
+- Canary image: shim/out/shim-boot-miatoll.img
+  (sha256 ba102aae9a338eb89cc8415d6604765db157966008be5721ba7d00022302677a),
+  cmdline `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam
+  -noprogress wdt=-1 wdt_test=no_user_checkin sweetlog=0` — NO ramdisk,
+  NO rd=: Android userdata untouched; kernel runs fbcon on the real
+  panel, expected end state is a root-mount failure (md0 absent) after
+  the full platform bring-up log — that alone proves UFS/GIC/16K/PSCI.
+- Stock partitions pulled to backup/ (sha-verified): boot.img 128 MB,
+  dtbo, vbmeta; stock DTB at dtb/boot_unpacked/dtb; live FDT
+  decompiled at dtb/miatoll-live.dts.
+- Touch is FocalTech FTS over SPI @a94000 (dual-IC node with Novatek
+  NVT-ts-spi); port after canary (sweet used Goodix I2C).
+- Panel this unit: dsi_nt36672c_huaxing_fhd_video_display (per
+  androidboot.lcmtype); not needed while reusing ABL splash.
+
 ## Status 2026-10-14 late: first XNU boot attempt
 - SWEET kernel builds (CI run 38635343732, patches 0001-0009). Verified offline: arm64, no PAC, no >v8.2 code,
   70300 classic relocs all in range (slide 0 = no loader work), entry = __start.
