@@ -460,6 +460,19 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 - Debug: xnu patch 0003 sweet-fbcon = kprintf drawn on the framebuffer (ADT node "sweet-fbcon").
 - ADT /arm-io ranges must not map to parent 0 (pe_arm_get_soc_base_phys()==0 disables serial): use parent 0x1000000.
 
+## Status 2026-10-20: CANARY PASSED — XNU to PID 1 on miatoll
+- fastboot boot shim-boot-miatoll.img (cpus=1, no rd): full boot to the
+  Apple_HFS wait; panel showed Skywalk PASSED, FB 1080x2400 @0x9c000000,
+  cpu0 mpidr 0x0 EL1 SGI1 OK, AMFI/Sandbox/HFS up.
+- fastboot boot shim-boot-miatoll2.img (+RAM-disk static init):
+  `SWEET userspace: init running as PID 1`, `SWEET init: still alive`.
+- Host USB lesson (OrangePi 3): EHCI@5311000 pair is the working one
+  (usb4/usb5); bind OHCI for FS fallback, unbind before expecting HS
+  chirps; dwc3/OPI (usb1) never hosts the phone fastboot reliably.
+- Canary #3 armed: cpus=6 (six A55s), same RAM-disk init.
+- Next: UFS/iOS root (needs user permission for userdata flash), touch
+  (FTS on spi@a94000), battery.
+
 ## Status 2026-10-20: miatoll ADT verified, canary image built
 - Live facts from the phone (SSH/Termux, KernelSU root, curtana hw 1.94.0):
   boot header v2, GIC/IMEM/PS_HOLD/UFS/FB/MPIDR all **byte-identical to

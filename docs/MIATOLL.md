@@ -77,6 +77,49 @@ SM7125 compatible string and synthetic ECID. QEMU smoke with the
 miatoll ADT passed (research/qemu-run-miatoll-adt/, no panic, Skywalk
 PASSED).
 
+## CANARY RESULTS — XNU boots on miatoll hardware (2026-10-20)
+
+Two `fastboot boot` runs (RAM-only, no partitions were flashed) with
+`shim-boot-miatoll.img` / `shim-boot-miatoll2.img`
+(payload = CI kernel 39349146597 + miatoll ADT, built on this host):
+
+**Run 1** (`cpus=1`, no ramdisk): full kernel bring-up on the real
+board, ended at the root-mount wait (`Waiting on …IOProviderClass…
+Apple_HFS`), then boot-picker keep looping (`Failed to write
+boot-picker-bringup-reason to NVRAM` — no NVRAM node; harmless).
+Confirmed on the panel: Skywalk self-tests PASSED, `SWEET FB:
+AppleCLCD 1080x2400 stride 4320 at 0x9c000000, presented as 1125x2436`,
+`SWEET CPU: cpu=0 entered initCPU mpidr=0x0 EL1 IRQs=1` → `came alive;
+SGI1 OK`, `SWEET CPU: requested=1 selected=1 (limit=8)`,
+AMFI/Sandbox/HFS registered, MAC framework, mcache/mbufinit.
+
+**Run 2** (`cpus=1`, ramdisk = static `sweet-init` Mach-O built with
+mkinit.py): the same bring-up plus:
+- `Added memory device md0/rmd0 (01000000/12000000)` — RAM-disk root
+  attached through the ADT "RAMDisk" memory-map entry;
+- `BSD root: md0, major 1, minor 0`;
+- `Load_init_program: attempting to load /sbin/launchd`;
+- `*** SWEET userspace: init running as PID 1 ***` followed by
+  `SWEET init: still alive` (console syscalls through devfs work);
+- post-init noise `debug_log_init: gPanicBase is still not initialized`
+  + `zlib memory 0x8000` — known sweet cosmetic messages.
+
+So on SM7125, Xiaomi-ABL-with-shim → XNU (Darwin 22.6) → exec of a
+statically signed arm64 binary as PID 1 all work. Android and userdata
+were untouched; the phone returns to Android on a long power press.
+
+**Transport note (host-side, unrelated to XNU):** the OrangePi 3
+HOST-side USB needed `unbind` on both OHCI (`ohci-platform`) HC pairs so
+EKCI got involved; the successful boot used the pair
+`5311000 (EHCI) + 5311400`. Also after phone-side USB gadget cycles and
+also the `dwc3` "blue" port (5200000.usb usb1) fails `Cannot enable. Maybe the cable`
+on harmonic; if the HC needed and lines live, this cable currently use
+usb1 fail but the black pair works once the gadget is fresh.
+
+**Next:** cpus=6 (all six A55) canary; then UFS / iOS root on userdata
+(requires explicit user confirmation — userdata flash destroys data);
+touch (FocalTech FTS SPI @a94000) and a battery driver port.
+
 ## miatoll delta / VERIFY list (remaining)
 
 ### 1. CPUs (shim.c, mkadt.py)
