@@ -242,6 +242,51 @@ touch (FocalTech FTS SPI @a94000) and a battery driver port.
    same WCN39xx class — strong precedent for an IONetworkingFamily
    route.
 
+## SAFETY — flash contract (HARD RULES, never violate)
+
+The ONLY partition that may ever be flashed on this miatoll is
+`userdata` (`/dev/block/sda18`, 48441929728 bytes ≈ 45.1 GiB). That
+flash destroys the Android system and user data on that partition
+(photos/videos are backed up to the PC out-of-repo first), and it is
+the one deliberate, user-confirmed step of the UFS bring-up.
+
+NEVER flash ANY of these, in fastboot, recovery or dd, no exceptions:
+
+- `modemst1`, `modemst2`, `fsg` — IMEI / modem NV, bricking-level data.
+- `persist`, `persistbak`, `dsp` — sensors calibration, DSP firmware.
+- `abl`, `xbl`, `xbl_config`, `abl_b/xbl_b` — bootloader chain.
+- `tz`, `hyp`, `rpm`, `pmic`, `cmnlib*`, `keymaster*`, `qupfw`,
+  `devcfg`, `imagefv`, `uefisecapp`, `multiimg*` — firmware chain.
+- `boot`, `boot_b`, `dtbo`, `vbmeta`, `misc`, `devinfo`, `ach`
+  — Android boot/AVB state (kept stock so recovery/Android return
+  stays possible).
+- logical partitions (`system`, `vendor`, `product`, `odm`, `oem_*`
+  super-block layout) — untouched.
+
+Safe-by-design operations:
+
+- `fastboot boot <img>` is RAM-only: it executes a kernel+payload
+  from memory and writes NOTHING to flash. All canary/development
+  boots use only this. Android is restored by a long power press
+  (hardware reboot) afterwards.
+- Early-boot XNU on this port does not write storage until launchd
+  mounts the root; the ramdisk/PID-1 canary runs are therefore read
+  only w.r.t. UFS.
+
+Recovery path back to Android (documented, requires doing things to
+`userdata` ONLY): OrangeFox recovery → Format Data (wipes userdata,
+recreates the F2FS/ext4 layout) → reflash stock `boot/dtbo/vbmeta`
+images from `backup/` (sha-verified copies kept on the PC) if their
+validation is ever in doubt; nothing else ever needs flashing.
+
+Current phase progress: iOS rootfs build from the iPhone10,3
+iOS 16.7.16 (20H392) IPSW via `tools/mkiosroot.sh`; the resulting
+HFS+ image (16G logical, sparse on the host) is converted with
+`img2simg` and will be flashed with the single command
+`fastboot flash userdata ios16-root.simg` after explicit user
+confirmation. The same `fastboot boot` path then launches XNU
+with `rd=ufsroot0` against the real root filesystem.
+
 ## Workflow
 
 As `AGENTS.md`: CI kernels on GitHub macOS runners; fb console and

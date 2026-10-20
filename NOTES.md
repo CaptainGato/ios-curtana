@@ -519,3 +519,27 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+## Status 2026-10-20 morning: UFS phase started (userdata = iOS root)
+- Safety contract written into docs/MIATOLL.md ("SAFETY — flash contract"):
+  the ONLY partition that may be flashed is userdata (/dev/block/sda18,
+  48441929728 bytes ≈ 45.1 GiB). Everything else is off-limits.
+- Media backup verified on the PC (backup-media/): media.tar.gz (956
+  entries, gzip -t OK) + tiktok.tar.gz (5734 entries, gzip -t OK).
+- User explicitly confirmed the userdata wipe.
+- research/ipsw-x/d22ap.adt extracted (remotezip DeviceTree.d22ap.im4p
+  from the 16.7.16 IPSW URL, then `ipsw img4 im4p extract`); mkadt-miatoll
+  no longer warns about the missing /product node — MobileGestalt input
+  now complete.
+- Toolchain on the host: apfs-fuse (built from sgan81/apfs-fuse,
+  /usr/local/bin/apfs-fuse), hfsprogs (mkfs/fsck.hfsplus), img2simg
+  (android-sdk-libsparse-utils), ipsw CLI 3.1.739 (blacktop, arm64 deb).
+- IPSW iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw downloading to
+  ipsw-x/ (resumable curl wrapper /tmp/dl_ipsw.sh; Apple CDN resets
+  connections occasionally, hence retries with -C -).
+- Plan: unzip OS/SystemOS/AppOS dmgs -> mkiosroot.sh (OUT 16G logical;
+  sparse-on-ext4 actual usage = content ≈ 6-7 GB, fits the disk) ->
+  fsck.hfsplus -> loop-mount rw force -> sweet-root-tweaks.py -> umount
+  -> img2simg -> (single confirmed step) fastboot flash userdata
+  ios16-root.simg -> final payload (mkadt-miatoll /tmp/adt + rd=ufsroot0
+  unentitled...) via fastboot boot.
