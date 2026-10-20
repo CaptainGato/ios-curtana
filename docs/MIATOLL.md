@@ -108,15 +108,23 @@ So on SM7125, Xiaomi-ABL-with-shim → XNU (Darwin 22.6) → exec of a
 statically signed arm64 binary as PID 1 all work. Android and userdata
 were untouched; the phone returns to Android on a long power press.
 
-**Transport note (host-side, unrelated to XNU):** the OrangePi 3
-HOST-side USB needed `unbind` on both OHCI (`ohci-platform`) HC pairs so
-EKCI got involved; the successful boot used the pair
-`5311000 (EHCI) + 5311400`. Also after phone-side USB gadget cycles and
-also the `dwc3` "blue" port (5200000.usb usb1) fails `Cannot enable. Maybe the cable`
-on harmonic; if the HC needed and lines live, this cable currently use
-usb1 fail but the black pair works once the gadget is fresh.
+**Run 3** (`cpus=6`, same ramdisk): all six Cortex-A55s booted via PSCI
+`CPU_ON` (`target=0x100..0x500 entry=0xc148d000`, `rc=0` each), each
+reports `came alive; SGI1 OK`; `SWEET CPU: 6/6 CPUs initialized, SGI1
+verified`; `mcache: 6 CPU(s)`. The same RAM-disk root + PID 1 path ran
+end-to-end.
 
-**Next:** cpus=6 (all six A55) canary; then UFS / iOS root on userdata
+**Host-side transfer lessons:** the reliable fastboot send path on
+OrangePi 3 turned out to be the pair `5311000 (EHCI) + 5311400` with a
+freshly started gadget: `fastboot boot … (16808 KB) OKAY [0.530s]`
+(high-speed). The phone's fastboot gadget sometimes settles into FS
+chirp cycling (OHCI FS descriptor read/64 errors, `-62`); repeated
+replugs until the gadget fresh-restarts generally land it on EHCI HS.
+The dwc3 "blue" port (5200000.usb) hosts the Android adb gadget at HS
+but fails the fastboot gadget (`Cannot enable`).
+
+**Next:** cpus=8 (add the two A76 golds at 0x600/0x700 — legal on
+SM7125, both clusters do 16K+LSE); then UFS / iOS root on userdata
 (requires explicit user confirmation — userdata flash destroys data);
 touch (FocalTech FTS SPI @a94000) and a battery driver port.
 
