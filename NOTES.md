@@ -543,3 +543,36 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   -> img2simg -> (single confirmed step) fastboot flash userdata
   ios16-root.simg -> final payload (mkadt-miatoll /tmp/adt + rd=ufsroot0
   unentitled...) via fastboot boot.
+
+## Status 2026-10-20 evening: iOS root IMAGE BUILT for miatoll userdata
+- Host crash 11:30 UTC explained: the first mkiosroot run wrote ~12 GB of
+  uncompressed OS content into the rootfs slice; df hit 100%, MMC wedged.
+  Recovery: freed space, REBUILT the hfsplus kernel module for this custom
+  kernel (6.18.44-current-sunxi64, kernel.org source, module archived at
+  modules/hfsplus2.ko; insmod after cdrom), then rebuilt the image under a
+  free-space watchdog.
+- Staged the three 16.7.16 dmg files on the phone (/data/local/tmp/ipsw-x,
+  sha256-verified), read them over sshfs (key auth now set up from host
+  root -> u0_a248) with apfs-fuse on top — mkiosroot semantics preserved,
+  one dmg at a time. Build script: /tmp/mkios_del.sh (phases sysos, appos,
+  os; dyld cache hardlinks (44), cryptex trampoline links, logd stores,
+  system keybag) -> iosroot.img: 16 GiB logical HFS+ "iOSRoot", 12 GB used,
+  fsck OK, transient warnings none after tweaks.
+- sweet-root-tweaks.py applied (Setup skip, activation state seed,
+  VirtualAudio plugin off, recodder off, BKNoWatchdogs, migration pref...);
+  the ark warning is the known one.
+- Final payload built: shim/out/payload-final.bin (kernel a1cd59a6d8530355
+  + mkadt-miatoll --highmem ADT with /product node from d22ap DeviceTree)
+  cmdline: debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam
+  -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1
+  wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1
+  wdt=-1 sweetfb_noconsole=1 sweetfb_hz=30
+- shim/out/shim-boot-final.img (sha256 0bf0b8fd4a95523b...) = boot v2 with
+  that payload ramdisk. READY.
+- Pending: fastboot enumeration of the phone in bootloader mode (the phone
+  rebooted bootloader over SSH; host sees NO usb device yet; waiting for a
+  replug into the EHCI black port). Then ONE flash:
+  fastboot flash userdata iosroot.img (16 GB, ~12-15 min at USB HS), then
+  fastboot boot shim/out/shim-boot-final.img. NOTHING ELSE is ever flashed.
+- Media backup verified twice (host sha list + verified by the user off-box;
+  local copies deleted, MANIFEST.sha256 kept in the repo rsync-free area).
