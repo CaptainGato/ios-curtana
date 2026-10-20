@@ -2,16 +2,35 @@
 
 ## Branch note: miatoll plan (2026-10-20)
 
-This branch (`miatoll`, not upstream) carries only documentation so far:
-`docs/MIATOLL.md` — the bring-up plan for porting ios-sweet to the Xiaomi
-miatoll family (Redmi Note 9S / 9 Pro / 9 Pro Max / Poco M2 Pro, SM7125
-Snapdragon 720G, Kryo 470 2x A76 + 6x A55). No device has been attached;
-all device dependencies are marked VERIFY there.
+**QEMU smoke test PASSED (branch miatoll, no code change to the kernel).**
+Kernel = CI run `39349146597` on the user fork `DOGYAN/ios-sweet`
+(kernel.development.sweet, sha256 a1cd59a6d8530355...; patches 0001-0081
+build clean). Payload = `tools/mkpayload.py kernel tools/mkadt.py --qemu`
+with `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam`.
+`tools/qemu-sweet.py /tmp/pq.bin /tmp/q --secs 240 --kernel <art>`:
+full boot to idle, no panic — Skywalk self-tests PASSED, 1/1 CPUs ini-
+tialized (mpidr 0x0), SGI1 verified, HID buttons+touch registered, SWEET
+FB AppleCLCD 1080x2400 -> presented 1125x2436, AMFI + permissive Sandbox
++ hfs-627.100.6 registered, mbinit/DLIL done. Evidence in
+`research/qemu-run-2026-10-20/` (fb.png decoded via glyph map, fb.txt).
 
-Key conclusions for adaptation (facts from the ios-sweet/MakrSas-ios-topaz
-code, guesses marked in the doc): the sweet patch series applies unchanged
-CPU-wise (both miatoll clusters are ARMv8.2 with 16K granule + LSE, no PAC,
-like sweet's; none of topaz's 0080-0082 SM6225 A53/A73 workarounds are
+**Tool change (this branch):** qemu-sweet.py + env `QEMU_MEM_BACKEND=/path`
+backs the 4G guest span with a disk file (`-object memory-backend-file`
++ `-numa node,memdev`, plus `-m` and `-nodefaults`, QEMU 10 compat) —
+needed because the OrangePi host has 2 GB RAM. Host also got an 8 G
+swapfile `/swapfile-8g` (manual step; remove after device work).
+
+Everything below was the plan text before this run (kept for context).
+
+### miatoll facts (unchanged)
+
+This branch (`miatoll`, not upstream) carries the bring-up plan for porting
+ios-sweet to the Xiaomi miatoll family (Redmi Note 9S / 9 Pro / 9 Pro
+Max / Poco M2 Pro, SM7125 Snapdragon 720G, Kryo 470 2x A76 + 6x A55).
+No device has been attached; all device dependencies are marked VERIFY
+in `docs/MIATOLL.md`. The sweet patch series applies unchanged CPU-wise
+(both miatoll clusters are ARMv8.2 with 16K granule + LSE, no PAC, like
+sweet's; none of topaz's 0080-0082 SM6225 A53/A73 workarounds are
 needed); the device delta is the usual set — shim constants (GIC
 `0x17a00000`/`0x17a60000` expected same-generation, IMEM restart reason,
 PS_HOLD, MPIDR pattern), `tools/mkadt.py` platform values (RAM banks
@@ -22,9 +41,11 @@ buttons on a PM6125-class PMIC instead of PM6150). Boot-image packing is
 an open question: sweet packs boot v2, topaz needed v4; the canary is
 booting the unmodified sweet shim image with `fastboot boot`.
 
-Next concrete action (needs the user's device): run the canary sequence in
-`docs/MIATOLL.md` step 1 and fill in the VERIFY values from the shim
-self-test output.
+The same kernel artifact from run `39349146597` is usable for the
+miatoll canary as-is: the machine config (SWEET) is platform-agnostic
+and everything device-specific enters through the ADT. Next concrete
+action (needs the user's device): run the canary sequence in
+`docs/MIATOLL.md` step 1 with a shim image built from this kernel.
 
 ## Agent handoff / active work (2026-10-15, latest)
 

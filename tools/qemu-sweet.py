@@ -273,12 +273,28 @@ def main():
     # virt RAM starts at 0x40000000: cover the payload's RAM (mkadt.py --highmem needs 8G).
     mem_size = struct.unpack_from('<Q', payload, 0x40)[0]
     ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
-    cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
-           '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
-           '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
-           '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
-           '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
-           '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
+    if os.environ.get('QEMU_MEM_BACKEND'):
+        # Host has less RAM than the guest span (e.g. SBCs): back the guest
+        # memory with a file on disk ('/path'; TCG dirties pages lazily, so
+        # demand paging keeps host usage low). Do not pass -m together with
+        # a numa memdev.
+        cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1',
+               '-m', f'{ram_gib}G',
+               '-nodefaults',
+               '-object', f'memory-backend-file,id=pc.ram,size={ram_gib}G,mem-path={os.environ["QEMU_MEM_BACKEND"]},prealloc=off,discard-data=on',
+               '-numa', 'node,memdev=pc.ram',
+               '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
+               '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
+               '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
+               '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
+               '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
+    else:
+        cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
+               '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', f'unix:{mon},server,nowait',
+               '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
+               '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
+               '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
+               '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
     if a.gdb:
         cmd += ['-S', '-gdb', 'tcp::1234']
 
