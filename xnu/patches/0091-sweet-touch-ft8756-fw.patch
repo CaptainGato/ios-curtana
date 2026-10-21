@@ -164,13 +164,12 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  static void
  touch_spi_pins(unsigned order)
  {
-@@ -1329,6 +1469,11 @@
+@@ -1329,6 +1469,10 @@
  		    order, touch_spi_order[order][0], touch_spi_order[order][1],
  		    touch_spi_order[order][2], touch_spi_order[order][3]);
  		touch_spi_pins(order);
 +		if (touch_fts_fw_load()) {
-+			printf("SWEET TOUCH: no FTS app; stopping
-+");
++			printf("SWEET TOUCH: no FTS app; stopping\n");
 +			goto out;
 +		}
  		int probe = touch_fts_spi_start();
