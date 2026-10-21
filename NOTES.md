@@ -103,6 +103,38 @@ SE MMIO-регистры читаются 0 или рабее таймаут), �
 **USB-гаджет-вопрос (не блокирует):** в gccdiag-буте гаджет также не
 поднялся (SWEET USB-строки проверить в miatoll-4.bin при разборе хвоста).
 
+**Root cause of missing USB (ПРОВЕРЕНО логом CI 39527795074):** начиная с commit
+9266f2c (переписан 0060 → TCM) CI **молча скиппит** несколько патчей (прогон
+`Skipping patch ... (already upstream, previously applied, or malformed)` —
+build.sh не валит ошибку, а дальше MAKEFLAGS=-k продолжает):
+- 0062-sweet-touch-power-battery (touch.c:490) и 0063-goodix-geni-packing —
+  контент устарел против новой TCM-редакции 0060; НЕ восстанавливаем (TCM-лайн
+  не зависит: L11C приходит от gpio90, rpmh-ветка не нужна) — но замечить,
+  что как следствие скипнулась и вставка `sweet_rpmh.c/sweet_spmi.c` в files.
+- **0072-sweet-usb-probe — `bsd/conf/files:110` НЕ применился** (в files строки
+  rpmh/spmi отсутствуют → контекст разъехался), следом каскадно скипнулись
+  0073/0074/0075/0076/0077/0081 («sweet_usb.c: No such file or directory»).
+  → **USB-набор ВООБЩЕ отсутствует в свежих miatoll-кернелах** — поэтому
+  «гаджет не поднимался в TCU1-бутах». Гаджет даже не строился в бинаре
+  (strings payload-gccdiag.bin: 0× «SWEET USB»; payload-finalc.bin: 31×, он
+  был собран из main-рана 39349146597).
+- Прочие скипнутые dxb-свои (TrustCache, iobuffermemd_monterey) — исторические,
+  не влияют.
+
+**Patch 0085-sweet-usb-restore.patch** (поверх текущего 0001-0084-состояния):
+1. `bsd/conf/files`: вставить `bsd/dev/sweet_usb.c standard` (за sweet_touch.c);
+2. `bsd/dev/sweet_ufs.c`: extern `sweet_usb_probe`, вызов после touch_init и
+   функции `sweet_log_copy`/`sweet_log_position` (0077 live-log helpers);
+3. `bsd/dev/sweet_usb.c` — целиком 931 строка как в WORKING-кернеле
+   (main run 393491 buildtree, включает 0072-0077 + 0081 link-state).
+   Патч проверен forward/reverse (`/tmp/vchk`, ALL-MATCH против состояния
+   «main-tree минус rpmh/spmi»).
+
+**Next boot expected (после зелёного CI с 0084+0085):** ожидаем
+`SWEET TOUCH: gcc branch 0x18010 hwcg idle (0x8000000a)` → `tcm probe 0x20 err=`,
+ПЛЮС восстановленный `SWEET USB: GDSC usb30_prim...` + ue0 up гаджет (live log
+через UDP вернётся). Если err ≠ 0 — смотреть SEMMIO/reset.
+
 ### >>> UPDATE 2026-10-21 04:45 (read first: ring analysis, GCC diag kernel built, boot pending) <<<
 
 **Ring analysis of the 04:00 tcmcons boot (`logs/miatoll-3.bin`, 1.2 MB, UNWRAPPED — all
