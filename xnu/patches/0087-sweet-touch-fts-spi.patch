@@ -294,7 +294,7 @@
 +	if (spi_mode) {
 +		unsigned order = (spi_mode >= 1 && spi_mode <= 4) ?
 +		    (unsigned)spi_mode - 1u : 0u;
-+		st.gpio = ml_io_map(TOUCH_SPI_TLMM_PA, 0x10000);
++		st.gpio = ml_io_map(TOUCH_SPI_TLMM_PA, 0x40000);
 +		if (!st.gpio) {
 +			printf("SWEET TOUCH: TLMM mapping failed\n");
 +			goto out;
