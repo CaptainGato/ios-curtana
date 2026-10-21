@@ -1,0 +1,104 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -40,6 +40,7 @@
+  * bypassed entirely: the four pads are muxed back to GPIO and driven as a
+  * mode-0 SPI bus, which needs no SE firmware, clock votes or DMA setup. */
+ #define TOUCH_SPI_TLMM_PA 0x03400000u
++#define TOUCH_WEST_PA     0x03500000u /* DT TLMM + WEST (0x100000) */
+ #define TOUCH_SPI_RST     8u
+ #define TOUCH_SPI_IRQ     9u
+ 
+@@ -478,50 +479,64 @@
+ 	{55, 56, 53, 54},	/* CLK first */
+ };
+ static unsigned spi_mosi = 53, spi_miso = 54, spi_clk = 55, spi_cs = 56;
++static void *spi_west;	/* WEST tile: SPI pads 53..56 */
++
++/* The atoll TLMM is split into tiles: the vendor pinctrl driver places
++ * gpio N at DT base + tile + N*0x1000. Reset/IRQ (8/9) are in NORTH
++ * (+0x500000), the QUP1 pads 53..56 in WEST (+0x100000). Accessing the
++ * bare DT base faults with an SError. */
++static inline void *
++spi_pin_base(unsigned pin)
++{
++	return (pin == TOUCH_SPI_RST || pin == TOUCH_SPI_IRQ) ? st.gpio : spi_west;
++}
+ 
+ /* Plain volatile access: touch_wr()/touch_rd() carry full barriers that
+- * would dominate a 576-bit transfer. The TLMM window is mapped as Device
+- * memory, so accesses to the same peripheral stay ordered. */
++ * would dominate a 576-bit transfer. The TLMM windows are mapped as
++ * Device memory, so accesses to the same peripheral stay ordered. */
+ static inline uint32_t
+-spi_rd(uint32_t off)
++spi_rd(void *base, uint32_t off)
+ {
+-	return *(volatile uint32_t *)(st.gpio + off);
++	return *(volatile uint32_t *)((char *)base + off);
+ }
+ 
+ static inline void
+-spi_wr(uint32_t off, uint32_t val)
++spi_wr(void *base, uint32_t off, uint32_t val)
+ {
+-	*(volatile uint32_t *)(st.gpio + off) = val;
++	*(volatile uint32_t *)((char *)base + off) = val;
+ }
+ 
+ static void
+ spi_out(unsigned pin, int val, unsigned drive)
+ {
+-	uint32_t io = spi_rd(TOUCH_GPIO_IO(pin)) & ~2u;
+-	spi_wr(TOUCH_GPIO_IO(pin), val ? io | 2u : io);
+-	uint32_t cfg = spi_rd(TOUCH_GPIO_CFG(pin)) & ~0x3ffu;
+-	spi_wr(TOUCH_GPIO_CFG(pin), cfg | (drive << 6) | 0x200u);
++	void *base = spi_pin_base(pin);
++	uint32_t io = spi_rd(base, TOUCH_GPIO_IO(pin)) & ~2u;
++	spi_wr(base, TOUCH_GPIO_IO(pin), val ? io | 2u : io);
++	uint32_t cfg = spi_rd(base, TOUCH_GPIO_CFG(pin)) & ~0x3ffu;
++	spi_wr(base, TOUCH_GPIO_CFG(pin), cfg | (drive << 6) | 0x200u);
+ }
+ 
+ static void
+ spi_in(unsigned pin, unsigned pull)
+ {
+-	uint32_t cfg = spi_rd(TOUCH_GPIO_CFG(pin)) & ~0x3ffu;
+-	spi_wr(TOUCH_GPIO_CFG(pin), cfg | pull);
+-	(void)spi_rd(TOUCH_GPIO_CFG(pin));
++	void *base = spi_pin_base(pin);
++	uint32_t cfg = spi_rd(base, TOUCH_GPIO_CFG(pin)) & ~0x3ffu;
++	spi_wr(base, TOUCH_GPIO_CFG(pin), cfg | pull);
++	(void)spi_rd(base, TOUCH_GPIO_CFG(pin));
+ }
+ 
+ static int
+ spi_level(unsigned pin)
+ {
+-	return (int)(spi_rd(TOUCH_GPIO_IO(pin)) & 1u);
++	return (int)(spi_rd(spi_pin_base(pin), TOUCH_GPIO_IO(pin)) & 1u);
+ }
+ 
+ static void
+ spi_set(unsigned pin, int val)
+ {
+-	uint32_t io = spi_rd(TOUCH_GPIO_IO(pin)) & ~2u;
+-	spi_wr(TOUCH_GPIO_IO(pin), val ? io | 2u : io);
++	void *base = spi_pin_base(pin);
++	uint32_t io = spi_rd(base, TOUCH_GPIO_IO(pin)) & ~2u;
++	spi_wr(base, TOUCH_GPIO_IO(pin), val ? io | 2u : io);
+ }
+ 
+ /* Full-duplex mode-0 frame, one CS assertion. delay() is microseconds. */
+@@ -1299,8 +1314,9 @@
+ 	if (spi_mode) {
+ 		unsigned order = (spi_mode >= 1 && spi_mode <= 4) ?
+ 		    (unsigned)spi_mode - 1u : 0u;
+-		st.gpio = ml_io_map(TOUCH_SPI_TLMM_PA, 0x40000);
+-		if (!st.gpio) {
++		st.gpio = ml_io_map(TOUCH_NORTH_PA, 0x10000);
++		spi_west = ml_io_map(TOUCH_WEST_PA, 0x40000);
++		if (!st.gpio || !spi_west) {
+ 			printf("SWEET TOUCH: TLMM mapping failed\n");
+ 			goto out;
+ 		}
