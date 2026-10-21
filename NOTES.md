@@ -1,5 +1,61 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## >>> UPDATE 2026-10-21 (later): touch is FTS over SPI, not I2C SE7 <<<
+
+**Root cause of "touch does not work": the driver was probing the wrong bus
+entirely.** From the live FDT (`backup/fdt.dtb`, curtana hwversion 1.94.0):
+
+| fact | live value |
+| --- | --- |
+| touch node | `/soc/spi@a94000/touchscreen`, `status = "ok"` |
+| compatible | `focaltech,fts` + `novatek,NVT-ts-spi` (this unit runs FTS) |
+| bus | QUP1 SE5 SPI, base `0xa94000`, `spi-max-frequency` = 8 MHz |
+| pads | TLMM `gpio53..56`, pinctrl group `qupv3_se11`, function `qup15` |
+| reset / irq | `gpio8` active low / `gpio9` falling (TLMM `@0x03400000`) |
+| rails | `touch_vddio` = pm6150_l18, `touch_lab` = lcdb_ldo, `touch_ibb` = lcdb_ncp |
+| I2C alternatives | `i2c@a84000/synaptics_tcm@20` and `atmel_mxt_ts@4a` are **status = "disabled"** |
+
+Consequences for the existing work:
+- The Synaptics TCM path (TCM probe @0x20 on SE7 `0xa84000`) can never see a
+  device: that node is disabled, and no unit of this board uses I2C touch.
+  The SE7 FIFO/GCC debug (0082/0084/0086) was chasing a chip that is not
+  there. Those patches stay (harmless, useful for sweet) but are not the fix.
+- `TOUCH_NORTH_PA 0x03900000` is the **sweet** TLMM base; atoll/SM7125 puts
+  TLMM at `0x03400000`, so every GPIO write before this patch went nowhere.
+
+**Patch `0087-sweet-touch-fts-spi.patch`** (new, applies on top of 0086):
+- new `TOUCH_FTS_SPI` backend: `sweetspi=1..4` switches the touch thread to a
+  **bit-banged mode-0 SPI bus** on TLMM `0x3400000` (gpio 53/54/55/56 =
+  MOSI/MISO/CLK/CS for order 1). No GENI firmware, GCC votes, DMA or QUP
+  clocks are touched — none of the SE7 problems apply.
+- protocol copied from the vendor `ft8756_spi` driver
+  (`focaltech_spi.c`): `[reg][ctrl][len_hi][len_lo][3 dummy][data][crc16]`,
+  read ctrl `0xa0`, status `rx[3] & 0xa0 == 0`, CRC16-Kermit over the data;
+  app chip id `0xa3`/`0x9f`, report register `0x01` (62 bytes, `0x90`
+  status nibble, 6-byte records — same layout the FTS parser already used).
+- fills the existing `sweet_hid_touch()` path, so backboardd gets touches as
+  soon as one frame is parsed.
+
+**Shim probe image `shim/out/touchprobe-curtana.img`** (524288 B, SHA256
+`09be559f0bf151d5e0785eaaaa315ea375ec89394516279bf9c233a61244ffd9`):
+`EXTRA_CFLAGS=-DTOUCH_PROBE=1 shim/build.sh` builds a shim-only image that
+prints, before resetting to Android after 45 s:
+- TLMM levels of gpio 8/9/53/54/55/56,
+- how long the FTS IRQ (gpio9) takes to go low after a reset (chip alive /
+  rail on), 500 ms max,
+- the four pin orders A..D with `wr=`, `rd=`, `st=`, chip id and CRC result.
+
+One photo of that screen decides: pin order (A expected), whether the rail
+is already on (irq drops), and whether the IC answers at all.
+
+Next: boot the probe → set `sweetspi=<order>` in the payload cmdline →
+build kernel with 0087 → confirm `SWEET TOUCH: selected FocalTech FTS over
+SPI` and a working Lock Screen. If the IRQ never goes low and every order
+fails, the next step is an RPMh vote for `ldoa18` (the sweet `sweet_rpmh.c`
+code looks the resource up by name in cmd-db and can be generalised), not
+more pin permutations.
+
+
 ## Branch note: miatoll plan (2026-10-20)
 
 **QEMU smoke test PASSED (branch miatoll, no code change to the kernel).**

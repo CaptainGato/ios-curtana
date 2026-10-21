@@ -176,15 +176,25 @@ touch (FocalTech FTS SPI @a94000) and a battery driver port.
 - Sweet's "video mode, no kick needed" path likely applies; kernel
   console over fb (patch 0003) needs only the FB constants.
 
-### 5. Touch (new driver patch, style of topaz's 0083)
+### 5. Touch — RESOLVED: FocalTech FTS over SPI (patch 0087)
 
-- Miatoll units ship different touch ICs by variant/revision; downstream
-  Xiaomi sm7125 dts shows the concrete candidates (**VERIFY** per unit:
-  `dmesg | grep -i -e ts -e touch` under Android or the downstream dts).
-  Candidates in the Goodix / Synaptics / focaltech families.
-- Plan: keep sweet's input stack (patches 0060/0062/0063: HID service +
-  RPMh rail vote + GENI I2C protocol), replace only the IC driver behind
-  `sweet_hid_touch()`.
+- Live FDT (`status = "ok"`): `/soc/spi@a94000/touchscreen`,
+  `focaltech,fts` (+ novatek alternative), QUP1 SE5 SPI at 8 MHz,
+  pads TLMM `gpio53..56` (group `qupv3_se11`, function `qup15`),
+  reset `gpio8`, irq `gpio9`, rails pm6150_l18 / lcdb_ldo / lcdb_ncp.
+  The `i2c@a84000` candidates (synaptics_tcm@20, atmel_mxt_ts@4a) are
+  `status = "disabled"` — the earlier TCM probe on SE7 could never work.
+- `xnu/patches/0087-sweet-touch-fts-spi.patch`: bit-banged mode-0 SPI on
+  the TLMM pads (no GENI firmware/GCC/DMA), vendor `focaltech_spi.c`
+  framing and CRC, app id `0xa3/0x9f`, report register `0x01`, feeding the
+  existing `sweet_hid_touch()`. Enabled with boot arg `sweetspi=1`
+  (2..4 = alternative pad orders; 1 = MOSI/MISO/CLK/CS on gpio 53..56).
+- `shim/out/touchprobe-curtana.img` (built with `EXTRA_CFLAGS=-DTOUCH_PROBE=1`)
+  prints pad levels, IRQ-after-reset latency and the result of all four
+  pad orders on the panel before resetting to Android: one boot tells us
+  pin order and whether the rail is already on.
+- If the IC never answers with the rail off, the follow-up is an RPMh vote
+  for `ldoa18` (generalise `sweet_rpmh.c`, which resolves names in cmd-db).
 
 ### 6. Buttons / PMIC (sweet_keys.c constants)
 

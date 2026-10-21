@@ -1,0 +1,338 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -32,6 +32,15 @@
+ #define TOUCH_GOODIX     1
+ #define TOUCH_FTS        2
+ #define TOUCH_TCM        3
++#define TOUCH_FTS_SPI    4
++
++/* curtana/miatoll: touch is FocalTech FTS over SPI on QUP1 SE5 (0xa94000),
++ * TLMM group qupv3_se11 (gpio 53..56, function qup15). The GENI engine is
++ * bypassed entirely: the four pads are muxed back to GPIO and driven as a
++ * mode-0 SPI bus, which needs no SE firmware, clock votes or DMA setup. */
++#define TOUCH_SPI_TLMM_PA 0x03400000u
++#define TOUCH_SPI_RST     8u
++#define TOUCH_SPI_IRQ     9u
+ 
+ #define SE_STATUS       0x040u
+ #define SE_MCLK         0x048u
+@@ -458,6 +467,261 @@
+ 	return err;
+ }
+ 
++/* ---- FocalTech FTS over a bit-banged SPI bus (curtana) ---- */
++
++static const uint8_t touch_spi_order[4][4] = {
++	/* mosi, miso, clk, cs */
++	{53, 54, 55, 56},	/* QUP group order, FDT function qup15 */
++	{54, 53, 55, 56},	/* MOSI/MISO swapped */
++	{56, 55, 54, 53},	/* group reversed */
++	{55, 56, 53, 54},	/* CLK first */
++};
++static unsigned spi_mosi = 53, spi_miso = 54, spi_clk = 55, spi_cs = 56;
++
++/* Plain volatile access: touch_wr()/touch_rd() carry full barriers that
++ * would dominate a 576-bit transfer. The TLMM window is mapped as Device
++ * memory, so accesses to the same peripheral stay ordered. */
++static inline uint32_t
++spi_rd(uint32_t off)
++{
++	return *(volatile uint32_t *)(st.gpio + off);
++}
++
++static inline void
++spi_wr(uint32_t off, uint32_t val)
++{
++	*(volatile uint32_t *)(st.gpio + off) = val;
++}
++
++static void
++spi_out(unsigned pin, int val, unsigned drive)
++{
++	uint32_t io = spi_rd(TOUCH_GPIO_IO(pin)) & ~2u;
++	spi_wr(TOUCH_GPIO_IO(pin), val ? io | 2u : io);
++	uint32_t cfg = spi_rd(TOUCH_GPIO_CFG(pin)) & ~0x3ffu;
++	spi_wr(TOUCH_GPIO_CFG(pin), cfg | (drive << 6) | 0x200u);
++}
++
++static void
++spi_in(unsigned pin, unsigned pull)
++{
++	uint32_t cfg = spi_rd(TOUCH_GPIO_CFG(pin)) & ~0x3ffu;
++	spi_wr(TOUCH_GPIO_CFG(pin), cfg | pull);
++	(void)spi_rd(TOUCH_GPIO_CFG(pin));
++}
++
++static int
++spi_level(unsigned pin)
++{
++	return (int)(spi_rd(TOUCH_GPIO_IO(pin)) & 1u);
++}
++
++static void
++spi_set(unsigned pin, int val)
++{
++	uint32_t io = spi_rd(TOUCH_GPIO_IO(pin)) & ~2u;
++	spi_wr(TOUCH_GPIO_IO(pin), val ? io | 2u : io);
++}
++
++/* Full-duplex mode-0 frame, one CS assertion. delay() is microseconds. */
++static void
++spi_frame(const uint8_t *tx, uint8_t *rx, unsigned n)
++{
++	spi_set(spi_cs, 0);
++	delay(1);
++	for (unsigned i = 0; i < n; ++i) {
++		uint8_t in = 0;
++		for (int k = 7; k >= 0; --k) {
++			spi_set(spi_mosi, (tx[i] >> k) & 1u);
++			delay(1);
++			spi_set(spi_clk, 1);
++			delay(1);
++			in = (uint8_t)((in << 1) | (spi_level(spi_miso) & 1u));
++			spi_set(spi_clk, 0);
++		}
++		if (rx) {
++			rx[i] = in;
++		}
++	}
++	spi_set(spi_cs, 1);
++	delay(150);		/* FTS requires >= 150 us CS high */
++}
++
++static uint16_t
++spi_crc(const uint8_t *p, unsigned n)
++{
++	uint16_t crc = 0xffff;
++	for (unsigned i = 0; i < n; ++i) {
++		crc ^= p[i];
++		for (int j = 0; j < 8; ++j) {
++			crc = (crc & 1u) ? (uint16_t)((crc >> 1) ^ 0x8408) :
++			    (uint16_t)(crc >> 1);
++		}
++	}
++	return crc;
++}
++
++#define FTS_SPI_HDR 4u
++#define FTS_SPI_DP  (FTS_SPI_HDR + 3u)
++
++/* vendor focaltech_spi.c: [reg][ctrl][len_hi][len_lo][3 dummy][data][crc16] */
++static int
++fts_spi_write(uint8_t reg, const uint8_t *data, unsigned len)
++{
++	uint8_t tx[96] = {0}, rx[96];
++	tx[0] = reg;
++	tx[1] = 0x00;		/* WRITE_CMD */
++	tx[2] = (uint8_t)(len >> 8);
++	tx[3] = (uint8_t)len;
++	for (unsigned i = 0; i < len && i < 80u; ++i) {
++		tx[FTS_SPI_DP + i] = data[i];
++	}
++	spi_frame(tx, rx, FTS_SPI_DP + len);
++	return (rx[3] & 0xa0u) ? EIO : 0;
++}
++
++static int
++fts_spi_read(uint8_t reg, uint8_t *out, unsigned len, int *crc_ok,
++    uint8_t *status)
++{
++	uint8_t tx[96] = {0}, rx[96];
++	if (len > 80u) {
++		return EINVAL;
++	}
++	tx[0] = reg;
++	tx[1] = 0xa0;		/* READ_CMD | DATA_CRC_EN */
++	tx[2] = (uint8_t)(len >> 8);
++	tx[3] = (uint8_t)len;
++	spi_frame(tx, rx, FTS_SPI_DP + len + 2);
++	if (status) {
++		*status = rx[3];
++	}
++	if (rx[3] & 0xa0u) {
++		if (crc_ok) {
++			*crc_ok = -1;
++		}
++		return EIO;
++	}
++	for (unsigned i = 0; i < len; ++i) {
++		out[i] = rx[FTS_SPI_DP + i];
++	}
++	if (crc_ok) {
++		uint16_t got = (uint16_t)(rx[FTS_SPI_DP + len] |
++		    (rx[FTS_SPI_DP + len + 1] << 8));
++		*crc_ok = (spi_crc(out, len) == got) ? 1 : 0;
++	}
++	return 0;
++}
++
++static void
++touch_spi_pins(unsigned order)
++{
++	spi_mosi = touch_spi_order[order][0];
++	spi_miso = touch_spi_order[order][1];
++	spi_clk = touch_spi_order[order][2];
++	spi_cs = touch_spi_order[order][3];
++	spi_out(TOUCH_SPI_RST, 0, 6);	/* hold the IC in reset */
++	spi_in(TOUCH_SPI_IRQ, 3);
++	spi_out(spi_cs, 1, 6);
++	spi_out(spi_clk, 0, 6);
++	spi_out(spi_mosi, 0, 6);
++	spi_in(spi_miso, 3);
++	delay(2000);
++	spi_out(TOUCH_SPI_RST, 1, 6);
++	delay(20000);
++}
++
++/* Reset, then read the application chip ids. EIO if the IC never answers. */
++static int
++touch_fts_spi_start(void)
++{
++	uint8_t id[2] = {0}, boot[2] = {0};
++	int ca = 0, cb = 0, cq = 0;
++	uint8_t sa = 0, sb = 0;
++
++	int ea = EIO, eb = EIO;
++	/* The IC needs a few tens of ms after reset; retry like the vendor. */
++	for (unsigned i = 0; i < 10; ++i) {
++		ea = fts_spi_read(0xa3, &id[0], 1, &ca, &sa);
++		eb = fts_spi_read(0x9f, &id[1], 1, &cb, &sb);
++		if (!ea && !eb && ca && cb) {
++			break;
++		}
++		delay(20000);
++	}
++	printf("SWEET TOUCH: spi a3=%02x crc=%d err=%d | 9f=%02x crc=%d err=%d irq=%d\n",
++	    id[0], ca, ea, id[1], cb, eb, spi_level(TOUCH_SPI_IRQ));
++	if (ea || eb) {
++		/* ROM/boot id path from focaltech_core.c: 0x55 <- 0xaa, read 0x90. */
++		const uint8_t start = 0xaa;
++		(void)fts_spi_write(0x55, &start, 1);
++		delay(12000);
++		int eq = fts_spi_read(0x90, boot, 2, &cq, NULL);
++		printf("SWEET TOUCH: spi boot-id err=%d id=%02x%02x crc=%d\n",
++		    eq, boot[0], boot[1], cq);
++		return EIO;
++	}
++	if (!ca || !cb) {
++		printf("SWEET TOUCH: spi id crc mismatch; treating as no IC\n");
++		return EIO;
++	}
++	return 0;
++}
++
++/* Reg 0x01 carries the touch frame: [0]=0x90 status, [1]=points, then
++ * 6-byte records (x_h/event, x_l, y_h/id, y_l, weight, area), exactly as
++ * the vendor parser in focaltech_core.c. */
++static int
++touch_fts_spi_report(void)
++{
++	uint8_t buf[68];
++	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++	uint32_t mask = 0, seen = 0;
++
++	memset(buf, 0, sizeof(buf));
++	if (fts_spi_read(0x01, buf, 62, NULL, NULL)) {
++		return EIO;
++	}
++	if ((buf[0] & 0xf0u) != 0x90u) {
++		return EIO;
++	}
++	unsigned n = buf[1] & 15u, active = 0;
++	if (n > TOUCH_MAX) {
++		return EIO;
++	}
++	for (unsigned i = 0; i < TOUCH_MAX; ++i) {
++		const uint8_t *p = buf + 2u + 6u * i;
++		unsigned id = p[2] >> 4, event = p[0] >> 6;
++		if (id >= TOUCH_MAX) {
++			break;	/* vendor sentinel for an unused record */
++		}
++		if (seen & (1u << id)) {
++			return EIO;
++		}
++		seen |= 1u << id;
++		if (event == 1u) {
++			continue;	/* UP record */
++		}
++		if (event == 3u) {
++			return EIO;
++		}
++		unsigned px = ((unsigned)(p[0] & 15u) << 8) | p[1];
++		unsigned py = ((unsigned)(p[2] & 15u) << 8) | p[3];
++		if (px > 1079 || py > 2399) {
++			return EIO;
++		}
++		mask |= 1u << id;
++		x[id] = (int)px;
++		y[id] = (int)py;
++		++active;
++	}
++	if (active != n) {
++		return EIO;
++	}
++	touch_report(mask, x, y);
++	return 0;
++}
++
+ static int
+ touch_focaltech(void)
+ {
+@@ -1022,6 +1286,57 @@
+ 	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
+ 	printf("SWEET TOUCH: starting in %u s\n", delay_s);
+ 	touch_wait(delay_s * 1000u);
++
++	/*
++	 * curtana (SM7125/miatoll): FocalTech FTS on SPI, not the sweet I2C
++	 * SE7. sweetspi=1..4 selects the pad order tried by the shim probe
++	 * (1 = QUP group order gpio53..56, the default). The GENI/GCC paths
++	 * below are skipped entirely: the bus is bit-banged.
++	 */
++	int spi_mode = 0;
++	(void)PE_parse_boot_argn("sweetspi", &spi_mode, sizeof(spi_mode));
++	if (spi_mode) {
++		unsigned order = (spi_mode >= 1 && spi_mode <= 4) ?
++		    (unsigned)spi_mode - 1u : 0u;
++		st.gpio = ml_io_map(TOUCH_SPI_TLMM_PA, 0x10000);
++		if (!st.gpio) {
++			printf("SWEET TOUCH: TLMM mapping failed\n");
++			goto out;
++		}
++		printf("SWEET TOUCH: SPI bit-bang order %u (pins %u/%u/%u/%u)\n",
++		    order, touch_spi_order[order][0], touch_spi_order[order][1],
++		    touch_spi_order[order][2], touch_spi_order[order][3]);
++		touch_spi_pins(order);
++		int probe = touch_fts_spi_start();
++		if (probe) {
++			printf("SWEET TOUCH: no SPI IC on this pin order; stopping\n");
++			goto out;
++		}
++		st.kind = TOUCH_FTS_SPI;
++		printf("SWEET TOUCH: selected FocalTech FTS over SPI, 1080x2400\n");
++		unsigned spi_errors = 0, spi_ticks = 0;
++		while (!st.dead) {
++			/* IRQ is active low; also read every 100 ms without it. */
++			if (!spi_level(TOUCH_SPI_IRQ) || st.active ||
++			    (++spi_ticks % 10u) == 0) {
++				int err = touch_fts_spi_report();
++				if (err) {
++					if ((spi_errors++ % 100u) == 0) {
++						printf("SWEET TOUCH: spi report err=%d\n", err);
++					}
++					if (spi_errors == 10) {
++						touch_report(0, st.x, st.y);
++					}
++				} else {
++					spi_errors = 0;
++				}
++			}
++			touch_wait(10);
++		}
++		touch_report(0, st.x, st.y);
++		goto out;
++	}
++
+ 	printf("SWEET TOUCH: mapping GCC/TLMM/SE7\n");
+ 	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x60000);
+ 	st.gpio = ml_io_map(TOUCH_NORTH_PA, 0x5b000);
