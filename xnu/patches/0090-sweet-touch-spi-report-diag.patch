@@ -1,0 +1,55 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -599,8 +599,8 @@
+ fts_spi_read(uint8_t reg, uint8_t *out, unsigned len, int *crc_ok,
+     uint8_t *status)
+ {
+-	uint8_t tx[96] = {0}, rx[96];
+-	if (len > 80u) {
++	uint8_t tx[128] = {0}, rx[128];
++	if (len > 110u) {
+ 		return EINVAL;
+ 	}
+ 	tx[0] = reg;
+@@ -689,12 +689,18 @@
+ static int
+ touch_fts_spi_report(void)
+ {
+-	uint8_t buf[68];
++	uint8_t buf[96], st8 = 0;
+ 	int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
+ 	uint32_t mask = 0, seen = 0;
++	static unsigned dbg;
+ 
++	/* Vendor reads 91 bytes (touch + gesture); try the touch part first. */
+ 	memset(buf, 0, sizeof(buf));
+-	if (fts_spi_read(0x01, buf, 62, NULL, NULL)) {
++	if (fts_spi_read(0x01, buf, 62, NULL, &st8) &&
++	    fts_spi_read(0x01, buf, 90, NULL, &st8)) {
++		if (dbg++ < 4u) {
++			printf("SWEET TOUCH: report status=%02x\n", st8);
++		}
+ 		return EIO;
+ 	}
+ 	if ((buf[0] & 0xf0u) != 0x90u) {
+@@ -1330,7 +1336,7 @@
+ 		}
+ 		st.kind = TOUCH_FTS_SPI;
+ 		printf("SWEET TOUCH: selected FocalTech FTS over SPI, 1080x2400\n");
+-		unsigned spi_errors = 0, spi_ticks = 0;
++		unsigned spi_errors = 0, spi_ticks = 0, spi_reports = 0;
+ 		while (!st.dead) {
+ 			/* IRQ is active low; also read every 100 ms without it. */
+ 			if (!spi_level(TOUCH_SPI_IRQ) || st.active ||
+@@ -1345,6 +1351,10 @@
+ 					}
+ 				} else {
+ 					spi_errors = 0;
++					if (spi_reports++ < 40u) {
++						printf("SWEET TOUCH: x=%d y=%d mask=%x\n",
++						    st.x[0], st.y[0], st.active);
++					}
+ 				}
+ 			}
+ 			touch_wait(10);
