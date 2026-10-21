@@ -49,6 +49,60 @@ action (needs the user's device): run the canary sequence in
 
 ## Agent handoff / active work (2026-10-15, latest)
 
+### >>> UPDATE 2026-10-21 05:20 (read first: 0x18010 KEEPSИ ПОСТАВЛЕН — hwcg idle, патч 0084) <<<
+
+**Ring of the gccdiag boot (`logs/miatoll-4.bin`, 685 778 B, flush #22, unwrapped):**
+	118: SWEET TOUCH: starting in 10 s
+	514: SWEET TOUCH: mapping GCC/TLMM/SE7
+	515: SWEET TOUCH: gcc votes pre=0x41000000/0 post=0x41bc0000/0xbc0000 rcg=0 cfg=0x100000 dfs=0x21
+	517: SWEET TOUCH: gcc branch 0x18010 halted (0x8000000a)
+	532: SWEET TOUCH: branch 0x18010 vote=0x41bc0000 no un halt
+	536: SWEET TOUCH: branch 0x18010 cbc bit0 failed (0x8000000a)
+	537: SWEET TOUCH: gcc bank=52000..0c 0 0 0x1240d7b 0 wrap0=0/0x8000000a r018141/0
+
+- tcm probe снова не достигнут (ok=false до probe), но данные ОПТИМАЛЬНОТИчные
+  на результат.
+- FACT (не догадка, сведено против вендорских файлов miatoll-kernel
+  miatoll-linux/droidian-kernel-xiaomi-sm6250@bookworm):
+  * `gcc_qupv3_wrap_1_s_ahb_clk` и `gcc_qupv3_wrap_0_s_ahb_clk` — ЕДИНСТВЕННЫЕ
+    бранчи с `hwcg_reg = halt_reg, hwcg_bit = 1` (m_ahb/core/core_2x/SEы — БЕЗ
+    hwcg). Этим объясняется симметрия: m_ahb/core unhalted, оба s_ahb halted.
+  * Vendor `clk-branch.c` (4.19): `clk_branch_in_hwcg_mode` = бит1 в hwcg_reg
+    СПРАВЕДЛИВ → **именно в этом режиме vendor ПРОПУСКАет halt-поллинг и считает
+    клок включённым**; клок сам расшатывается устройством при первой AHB-
+    транзакции. Нашее значение после `cbc bit0` — `0x8000000a` — бит1
+    УСТАНОВЛЕН: бранч весь это время был в легальном hwcg idle-режиме.
+  * `clk_branch2_check_halt` считает бранч работающим при бит31=0 ИЛИ при
+    полном значении `(0x2 << 28)` = 0x20000000 (NOC FSM "ON" в битах 30:28).
+    Биты 1/3 в прочитанном 0x8000000a к проверке не относятся.
+  * Другие банки вендора: 0x52000 (cpsu/disp/...), 0x52008 (QUP биты 6..15,
+    18..27), 0x52010 (PLL), **0x5200c в atoll вообще не существует** (это
+    sm7150 — наш TOUCH_GCC_VOTE попадает в неиспользуемую ячейку: безвредно).
+    Pre-existing bit30 в 0x52008 = НЕ клок-QUP-бит (в вендоре битов ≥28 на
+    0x52008 нет) — оставить как есть.
+- ВЫВОД: QUP subsystem жив, наш «fail» был ложным; SE7 probe должен был дойти.
+- **Patch 0084-sweet-touch-hwcg-fsm.patch** (НЕ правит 0082/0083): в
+  touch_clocks() per-branch recovery:
+  * бит31=0 → continue (собственно как раньше);
+  * значение == 0x20000000 → `fsm on`;
+  * бит1 установлен → `hwcg idle` (+якорим одиночный голосовой бит в 0x52008
+    чтобы клок не сбрасывался) и continue; ВНИМАНИЕ: это не требовало прогонки
+    полла — клок «рас Hodg» при транзакции сама;
+  * только при бит1=0 сохраняется прежняя ветка (голосование → CBCR bit0), но
+    поллинг-критерий теперь `бExecutionContext_clear || v==0x20000000 || бит1`.
+  Патч проверен forward/reverse (`git apply -R --check` OK, /tmp/mk0084.sh
+  генерация из /tmp/sweet_touch.c.pre0084 = состояние после 0083).
+
+**Next boot expected:** `SWEET TOUCH: gcc branch 0x18010 hwcg idle (0x8000000a)`
+и, дальше, `SWEET TOUCH: tcm probe 0x20 err=...` — если err=0, ожидаем
+`tcm mode=... part=... selected Synaptics TCM`. Если err ≠ 0 (например
+SE MMIO-регистры читаются 0 или рабее таймаут), значит hwcg-семантика не
+единственная — тогда проверять по `SWEET USB`-строкам опоры USB3 и решать,
+неудачный OTG-halt (GPIO8/TLMM9) или сборка SE7-драйвера.
+
+**USB-гаджет-вопрос (не блокирует):** в gccdiag-буте гаджет также не
+поднялся (SWEET USB-строки проверить в miatoll-4.bin при разборе хвоста).
+
 ### >>> UPDATE 2026-10-21 04:45 (read first: ring analysis, GCC diag kernel built, boot pending) <<<
 
 **Ring analysis of the 04:00 tcmcons boot (`logs/miatoll-3.bin`, 1.2 MB, UNWRAPPED — all

@@ -1,0 +1,68 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -169,10 +169,14 @@
+ 		}
+ 	}
+ 	/*
+-	 * Per-branch recovery with diagnostics in one boot: first the direct
+-	 * single-bit vote, then a bit0 write into the branch register itself.
+-	 * Report everything and only fail at the end, so one boot shows the
+-	 * full picture for all branches.
++	 * Per-branch recovery with diagnostics. Vendor clk-branch.c semantics
++	 * (Linux 4.19, miatoll): a branch is running when CLK_OFF (bit31) is
++	 * clear OR the NOC FSM status (bits 30:28) reads 2 ("ON"), and the
++	 * halt poll is skipped entirely while the branch is in hardware
++	 * clock-gating mode (hwcg bit1 of the same register) - the clock
++	 * un-gates by itself on AHB transactions. Both s_ahb branches live
++	 * in that hwcg idle state on this device, so reporting bit31 alone
++	 * stalled the bring-up even though the wrapper is fully usable.
+ 	 */
+ 	static const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
+ 	static const uint32_t vbits[] = {18, 19, 20, 21, 23};
+@@ -180,6 +184,16 @@
+ 	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
+ 		uint32_t v = touch_rd(st.gcc, branches[i]);
+ 		if (!(v & (1u << 31))) {
++			continue; /* running */
++		}
++		if (v == 0x20000000u) {
++			printf("SWEET TOUCH: gcc branch %#x fsm on (%#x)\n", branches[i], v);
++			continue;
++		}
++		if (v & (1u << 1)) {
++			printf("SWEET TOUCH: gcc branch %#x hwcg idle (%#x)\n", branches[i], v);
++			/* Vote anyway so the enable stays latched for our SE use. */
++			touch_wr(st.gcc, 0x52008u, touch_rd(st.gcc, 0x52008u) | (1u << vbits[i]));
+ 			continue;
+ 		}
+ 		printf("SWEET TOUCH: gcc branch %#x halted (%#x)\n", branches[i], v);
+@@ -189,22 +203,24 @@
+ 		    touch_rd(st.gcc, TOUCH_GCC_VOTE) | (1u << vbits[i]));
+ 		bool on = false;
+ 		for (unsigned j = 0; j < 200; ++j) {
+-			if (!(touch_rd(st.gcc, branches[i]) & (1u << 31))) {
++			v = touch_rd(st.gcc, branches[i]);
++			if (!(v & (1u << 31)) || v == 0x20000000u || (v & (1u << 1))) {
+ 				on = true;
+ 				break;
+ 			}
+ 			delay(1000);
+ 		}
++		v = touch_rd(st.gcc, branches[i]);
+ 		if (on) {
+-			printf("SWEET TOUCH: branch %#x single vote ok (%#x)\n",
+-			    branches[i], voted);
++			printf("SWEET TOUCH: branch %#x vote ok (%#x)\n", branches[i], voted);
+ 			continue;
+ 		}
+ 		printf("SWEET TOUCH: branch %#x vote=%#x no un halt\n", branches[i], voted);
+-		v = touch_rd(st.gcc, branches[i]);
+ 		touch_wr(st.gcc, branches[i], v | 1u);
++		on = false;
+ 		for (unsigned j = 0; j < 200; ++j) {
+-			if (!(touch_rd(st.gcc, branches[i]) & (1u << 31))) {
++			v = touch_rd(st.gcc, branches[i]);
++			if (!(v & (1u << 31)) || v == 0x20000000u || (v & (1u << 1))) {
+ 				on = true;
+ 				break;
+ 			}
