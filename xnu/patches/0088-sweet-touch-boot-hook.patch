@@ -1,14 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -9,6 +9,7 @@
- #include <sys/param.h>
- #include <sys/systm.h>
- #include <sys/errno.h>
-+#include <sys/kernel.h>
- #include <kern/clock.h>
- #include <kern/thread.h>
- #include <kern/sched_prim.h>
-@@ -1292,8 +1293,26 @@
+@@ -1429,8 +1429,24 @@
  	kern_return_t kr = kernel_thread_start(touch_thread, NULL, &thread);
  	if (kr == KERN_SUCCESS) {
  		thread_deallocate(thread);
@@ -22,8 +14,8 @@
 + * RAM disk (rd=md0), so the touch bus can be probed without a UFS root.
 + * Enabled with sweettouchboot=1; inert on normal boots.
 + */
-+static void
-+sweet_touch_boot(__unused void *arg)
++void
++sweet_touch_boot_probe(void)
 +{
 +	uint32_t on = 0;
 +
@@ -32,6 +24,19 @@
 +		sweet_touch_init();
 +	}
 +}
-+
-+SYSINIT(sweet_touch_boot, SI_SUB_KTHREAD_UPDATE, SI_ORDER_ANY, sweet_touch_boot, NULL);
  #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -798,6 +798,11 @@
+ 	bsd_init_kprintf("calling bsd_autoconf\n");
+ 	bsd_autoconf();
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	extern void sweet_touch_boot_probe(void);
++	sweet_touch_boot_probe();
++#endif
++
+ #if CONFIG_DTRACE
+ 	dtrace_postinit();
+ #endif
