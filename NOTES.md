@@ -135,6 +135,26 @@ build.sh не валит ошибку, а дальше MAKEFLAGS=-k продол
 ПЛЮС восстановленный `SWEET USB: GDSC usb30_prim...` + ue0 up гаджет (live log
 через UDP вернётся). Если err ≠ 0 — смотреть SEMMIO/reset.
 
+**Following the green CI** (run 39533317666, commit f0e1844, kernel
+0d8ec8b07fc365802234311715dadd513c863ec42d3d0a93297af0d21a72ce865 — confirm
+SHA via `cryptosum 0d8ec8b07fc365802234311715dadd513c863ec42d3da93297af0d21a72ce865`):
+0084+0085 both APPLIED at CI (log: «Applying patch ... 0085» без warning);
+0072-0077/0081 по-прежнему скипнуты как дубляж (теперь безвредно), 0062/0063
+остаются скипнутыми (TCM-лайн не нуждается). Strings: 31× «SWEET USB» + 1×
+«hwcg idle» ARE in the binary.
+- payload собран: `shim/out/payload-usbback.bin` (16.6 MB) +
+  `shim/out/shim-boot-usbback.img` (17.17 MB), cmdline SAME as gccdiag:
+  `serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0
+  unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin
+  ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetusb=2
+  sweettouchdelay=10`. fb-консоль ОН.
+- Boot-команды: pre-start listener `python3 /tmp/udp_listen.py ~/iostest/
+  ios-sweet/logs/live-usbback.txt &` (пRMитку: если телефон не появится с
+  gadget-ом, что-то fails hard), `adb`/fastboot: hard reset Vol- →
+  `fastboot boot shim/out/shim-boot-usbback.img`. After 3-5 min,
+  для ring: user holds Power+VolUp (OrangeFox), then
+  `./tools/sweet-log-pull.sh logs/miatoll-5.bin`.
+
 ### >>> UPDATE 2026-10-21 04:45 (read first: ring analysis, GCC diag kernel built, boot pending) <<<
 
 **Ring analysis of the 04:00 tcmcons boot (`logs/miatoll-3.bin`, 1.2 MB, UNWRAPPED — all
