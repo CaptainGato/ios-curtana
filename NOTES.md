@@ -639,6 +639,29 @@ Next: commit + push branch miatoll, wait for the CI kernel build,
  sweetfb_noconsole=1 sweetusb=2), fastboot boot, re-pull the console
  ring and look for "SWEET TOUCH: selected Synaptics".
 
+**DONE (2026-10-21 03:00):** CI run 39517431884 (branch miatoll) SUCCESS,
+kernel sha256 d62bd601...1024 saved to xnu/out-kernel/. Payload
+`shim/out/payload-touchtcu1.bin` built from it via mkpayload.py +
+shim/out/miatoll.adt with cmdline:
+  serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0
+  unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin
+  ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30
+  sweetfb_noconsole=1 sweetusb=2 sweettouchdelay=10
+(console OFF for a clean lockscreen, UDP live log ON, touch starts 10 s
+after boot instead of 45). Boot image **`shim/out/shim-boot-touchtcu1.img`**
+(17.17 MB, bootargs verified inside). Boot pending: the phone went dark
+after `adb reboot bootloader` from OrangeFox (USB not enumerating again —
+known flaky port; user must re-plug the cable or force Power+Vol-
+bootloader), then:
+  fastboot boot shim/out/shim-boot-touchtcu1.img
+Expected signals afterwards: host side `enx02005e77ee01` + listener on
+UDP:5140 (/tmp/usbnet_listen.py) for the live log; in the log check for
+"SWEET TOUCH: tcm probe 0x20 err=" then "tcm mode=... part=..." and
+"selected Synaptics TCM". If instead: "gcc votes=..." -> the vote fix
+worked; "no unique supported IC (goodix=...)" -> IC unpowered (PMIC
+rails = follow-up work); "need ABL-loaded I2C firmware and 32-bit
+FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
+
 ## 2026-10-21 MIATOLL: FLASH + FIRST SUCCESSFUL iOS BOOT
 
 - fastboot flash userdata was abandoned (16 GB raw > max-download-size,
