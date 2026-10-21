@@ -1,0 +1,37 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -9,6 +9,7 @@
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/errno.h>
++#include <sys/kernel.h>
+ #include <kern/clock.h>
+ #include <kern/thread.h>
+ #include <kern/sched_prim.h>
+@@ -1292,8 +1293,26 @@
+ 	kern_return_t kr = kernel_thread_start(touch_thread, NULL, &thread);
+ 	if (kr == KERN_SUCCESS) {
+ 		thread_deallocate(thread);
+ 	} else {
+ 		printf("SWEET TOUCH: kernel_thread_start failed %d\n", kr);
+ 	}
+ }
++
++/*
++ * Diagnostic hook: start the touch thread even when the root comes from a
++ * RAM disk (rd=md0), so the touch bus can be probed without a UFS root.
++ * Enabled with sweettouchboot=1; inert on normal boots.
++ */
++static void
++sweet_touch_boot(__unused void *arg)
++{
++	uint32_t on = 0;
++
++	(void)PE_parse_boot_argn("sweettouchboot", &on, sizeof(on));
++	if (on) {
++		sweet_touch_init();
++	}
++}
++
++SYSINIT(sweet_touch_boot, SI_SUB_KTHREAD_UPDATE, SI_ORDER_ANY, sweet_touch_boot, NULL);
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
