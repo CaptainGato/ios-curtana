@@ -49,6 +49,60 @@ action (needs the user's device): run the canary sequence in
 
 ## Agent handoff / active work (2026-10-15, latest)
 
+### >>> UPDATE 2026-10-21 04:45 (read first: ring analysis, GCC diag kernel built, boot pending) <<<
+
+**Ring analysis of the 04:00 tcmcons boot (`logs/miatoll-3.bin`, 1.2 MB, UNWRAPPED — all
+early lines present):** the touch thread ran and FAILED at the same place, but for the
+first time we see the full diagnostics:
+
+	118: SWEET TOUCH: starting in 10 s
+	986: SWEET TOUCH: mapping GCC/TLMM/SE7
+	987: SWEET TOUCH: gcc votes=0x41bc0000/0xbc0000 rcg=0 cfg=0x100000 dfs=0x21
+	1001: SWEET TOUCH: GCC branch 0x18010 halted (0x8000000a)
+
+- The TCM probe never ran (driver gave up at the branch check).
+- Votes: 0x52008 post-write contained our whole mask (0xbc0000 = bits 19,20,21,22,23;
+  0x52008 = 0x41bc0000 = mask + pre-existing bit30), so the writes LANDED. Mainline atoll
+  GCC facts (/tmp/gcc-atoll.c, cross-checked with the phone dtbo): 0x18004 = wrap1_core_2x
+  BIT18, 0x18008 = wrap1_core BIT19, 0x1800c = wrap_1_m_ahb BIT20, **0x18010 =
+  wrap_1_s_ahb BIT21**, 0x18144 = wrap1_s1_clk BIT23, s1 RCG cmd_rcgr = 0x18148. The 2x/
+  core/m_ahb halt regs were already clear; ONLY wrap_1_s_ahb stayed halted despite bit21
+  being set in the vote bank. Where 0x18000.. halts come from and whether the "DFS" branch
+  condition (dfs=0x21) matters = unknown; a live /dev/mem probe in OrangeFox is impossible
+  (CONFIG_DEVMEM=n).
+- The rest of the boot was healthy/quiet after the dedup: SpringBoard, backboardd parked,
+  key events, no panic. Boot again reached userland.
+- The 03:02 "экран потух" explanation stands: with the console ON the panel presented all
+  the way (user saw logs "бегут"); it was `sweetfb_noconsole=1` that blanked the panel in
+  the earlier attempt.
+
+**Kernel patch set extended (commit a0ac887, CI run 39527795074, watches for success):**
+- 0082-sweet-touch-gcc-diag.patch: touch_clocks() per-branch recovery: for each halted
+  branch print it, re-vote its single enable bit alone (in BOTH vote banks), poll 200 ms;
+  if still halted, write bit0 into the branch register itself (CBCR fallback) and poll —
+  report every step in one boot, fsil only at the end so one boot shows everything. Extra
+  dump line `SWEET TOUCH: gcc bank=52000..0c ... wrap0=... r018141/...` for mapping.
+- 0083-sweet-quiet-logs.patch: AKS per-call log only with `sweetaks=1`; `exec %s` only
+  with `sweetexec=1`; SMP sampler off unless `sweetsample=<names>` (`-` = off). The fb
+  console stays on → readable panel, ring content survives (touch prints stay in reach).
+
+**Next boot plan (after CI green):** kernel → `python3 tools/mkpayload.py
+xnu/out-kernel/kernel.development.sweet shim/out/miatoll.adt shim/out/payload-gccdiag.bin
+--cmdline "serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0
+unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1
+launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetusb=2 sweettouchdelay=10"`, then
+`shim/build.sh out/payload-gccdiag.bin` + rename to `shim-boot-gccdiag.img` (NOTE:
+build.sh writes out/shim-boot.img; cp to the name). Boot first with the UDP listener
+(`/tmp/udp_listen.py logs/live-gccdiag.txt &`) and read the panel. Expected decision
+points in the log:
+- `branch 0x18010 single vote ok` → the vote needs per-branch granularity → done, next
+  boot should reach `tcm probe 0x20 err=`.
+- `cbc bit0 ok` → branch is a CBCR (bit0) not a vote bit → adopt, next boot reaches probe.
+- `vote=... no un halt` + `cbc bit0 failed` → neither path works: needs power domain
+  (QUPV3 wrapper GDSC?) — record 0x52000../50000 dump values for the next step.
+- `DFS level0=... is not XO/1` → the DFS RCG path refuses 19.2 MHz — integrate clock
+  programming.
+
 ### >>> UPDATE 2026-10-21 04:00 (read first: 03:02 boot DID run; dark screen = noconsole flag) <<<
 
 **Boot attempt #1 03:02 with touchtcu1 (TCM kernel d62bd601) did NOT die.** Ring proof
