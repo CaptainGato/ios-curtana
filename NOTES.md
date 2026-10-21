@@ -694,3 +694,16 @@ FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
 - Date shows Wednesday December 31 (no RTC/NTP driver) — cosmetic.
 - Android will NOT boot until userdata is restored (stock MIUI flash
   or wipe via OrangeFox). RAM-only boot never touches other partitions.
+* Boot attempt #1 (03:02) FAILED before XNU: fastboot boot OKAY (20 s
+  + 5 s), but the device fell straight back to fastboot (18d1:d00d, no
+  network gadget, no UDP). Same shape as the known nondeterministic
+  early-fallback failures. `fastboot oem reboot-recovery` and even a
+  plain `fastboot reboot` hit "Write to device failed (Timer expired)",
+  then the phone dropped off the USB bus entirely (no fastboot/adb).
+  Needs a physical re-plug (the historically working black EHCI port),
+  then: force bootloader with Power+Vol- if the screen is dark, then
+  `fastboot boot shim/out/shim-boot-touchtcu1.img`. Expected in the
+  log: "SWEET TOUCH: gcc votes=..." (vote fix applied), then
+  "tcm probe 0x20 err=" / "tcm mode=... part=..." / "selected Synaptics
+  TCM". No network gadget = nothing to see; pull the ring via OrangeFox
+  + tools/sweet-log-pull.sh and grep "SWEET TOUCH: tcm".
