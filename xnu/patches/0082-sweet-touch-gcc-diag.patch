@@ -1,0 +1,91 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -142,12 +142,14 @@
+ 	 * the polled bits are reserved in the register the SoC does not use.
+ 	 */
+ 	uint32_t mask = (0x0fu << 18) | (1u << 23);
+-	touch_wr(st.gcc, 0x52008u, touch_rd(st.gcc, 0x52008u) | mask);
+-	touch_wr(st.gcc, TOUCH_GCC_VOTE, touch_rd(st.gcc, TOUCH_GCC_VOTE) | mask);
++	uint32_t pre08 = touch_rd(st.gcc, 0x52008u);
++	uint32_t pre0c = touch_rd(st.gcc, TOUCH_GCC_VOTE);
++	touch_wr(st.gcc, 0x52008u, pre08 | mask);
++	touch_wr(st.gcc, TOUCH_GCC_VOTE, pre0c | mask);
+ 	uint32_t dfs = touch_rd(st.gcc, TOUCH_RCG + 0x14u);
+ 	uint32_t cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
+-	printf("SWEET TOUCH: gcc votes=%#x/%#x rcg=%#x cfg=%#x dfs=%#x\n",
+-	    touch_rd(st.gcc, 0x52008u), touch_rd(st.gcc, TOUCH_GCC_VOTE),
++	printf("SWEET TOUCH: gcc votes pre=%#x/%#x post=%#x/%#x rcg=%#x cfg=%#x dfs=%#x\n",
++	    pre08, pre0c, touch_rd(st.gcc, 0x52008u), touch_rd(st.gcc, TOUCH_GCC_VOTE),
+ 	    touch_rd(st.gcc, TOUCH_RCG), cfg, dfs);
+ 	if (dfs & 1u) {
+ 		/* SE CLK_SEL=0 selects DFS performance level 0. Do not alter tables. */
+@@ -166,15 +168,63 @@
+ 			return false;
+ 		}
+ 	}
+-	const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
++	/*
++	 * Per-branch recovery with diagnostics in one boot: first the direct
++	 * single-bit vote, then a bit0 write into the branch register itself.
++	 * Report everything and only fail at the end, so one boot shows the
++	 * full picture for all branches.
++	 */
++	static const uint32_t branches[] = {0x18004, 0x18008, 0x1800c, 0x18010, 0x18144};
++	static const uint32_t vbits[] = {18, 19, 20, 21, 23};
++	bool ok = true;
+ 	for (unsigned i = 0; i < sizeof(branches) / sizeof(branches[0]); ++i) {
+-		if (!touch_wait_clear(st.gcc, branches[i], 1u << 31)) {
+-			printf("SWEET TOUCH: GCC branch %#x halted (%#x)\n", branches[i],
+-			    touch_rd(st.gcc, branches[i]));
+-			return false;
++		uint32_t v = touch_rd(st.gcc, branches[i]);
++		if (!(v & (1u << 31))) {
++			continue;
++		}
++		printf("SWEET TOUCH: gcc branch %#x halted (%#x)\n", branches[i], v);
++		touch_wr(st.gcc, 0x52008u, touch_rd(st.gcc, 0x52008u) | (1u << vbits[i]));
++		uint32_t voted = touch_rd(st.gcc, 0x52008u);
++		touch_wr(st.gcc, TOUCH_GCC_VOTE,
++		    touch_rd(st.gcc, TOUCH_GCC_VOTE) | (1u << vbits[i]));
++		bool on = false;
++		for (unsigned j = 0; j < 200; ++j) {
++			if (!(touch_rd(st.gcc, branches[i]) & (1u << 31))) {
++				on = true;
++				break;
++			}
++			delay(1000);
++		}
++		if (on) {
++			printf("SWEET TOUCH: branch %#x single vote ok (%#x)\n",
++			    branches[i], voted);
++			continue;
++		}
++		printf("SWEET TOUCH: branch %#x vote=%#x no un halt\n", branches[i], voted);
++		v = touch_rd(st.gcc, branches[i]);
++		touch_wr(st.gcc, branches[i], v | 1u);
++		for (unsigned j = 0; j < 200; ++j) {
++			if (!(touch_rd(st.gcc, branches[i]) & (1u << 31))) {
++				on = true;
++				break;
++			}
++			delay(1000);
++		}
++		v = touch_rd(st.gcc, branches[i]);
++		if (on) {
++			printf("SWEET TOUCH: branch %#x cbc bit0 ok (%#x)\n", branches[i], v);
++			continue;
+ 		}
++		printf("SWEET TOUCH: branch %#x cbc bit0 failed (%#x)\n", branches[i], v);
++		ok = false;
+ 	}
+-	return true;
++	/* Neighbour registers for mapping the wrapper banks if a branch fails. */
++	printf("SWEET TOUCH: gcc bank=52000..0c %#x %#x %#x %#x wrap0=%#x/%#x r018141/%#x\n",
++	    touch_rd(st.gcc, 0x50000u), touch_rd(st.gcc, 0x50004u),
++	    touch_rd(st.gcc, 0x52000u), touch_rd(st.gcc, 0x52004u),
++	    touch_rd(st.gcc, 0x17004u), touch_rd(st.gcc, 0x17008u),
++	    touch_rd(st.gcc, 0x18140u));
++	return ok;
+ }
+ 
+ /* Called only for a transfer started by this driver, including a stretched TX. */

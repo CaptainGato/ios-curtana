@@ -1,0 +1,62 @@
+--- a/iokit/Kernel/arm/SweetKeyStore.cpp
++++ b/iokit/Kernel/arm/SweetKeyStore.cpp
+@@ -15,6 +15,7 @@
+  * with kIOReturnUnsupported.
+  */
+ #include <pexpert/arm64/board_config.h>
++#include <pexpert/pexpert.h>
+ 
+ #if defined(SWEET)
+ #include <IOKit/IOService.h>
+@@ -234,8 +235,15 @@
+ 
+ 	char name[32];
+ 	proc_selfname(name, sizeof(name));
+-	IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
+-	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
++	static int aks_log = -1;
++	if (aks_log < 0) {
++		aks_log = 0;
++		(void)PE_parse_boot_argn("sweetaks", &aks_log, sizeof(aks_log));
++	}
++	if (aks_log) {
++		IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
++		    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
++	}
+ 	return ret;
+ }
+ #endif /* SWEET */
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7412,8 +7412,18 @@
+ 				goto done;
+ 			}
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+-			/* SWEET runs every iOS binary this way: one short line per exec. */
+-			printf("exec %s\n", p->p_name);
++		/* SWEET runs every iOS binary this way: one short line per exec.
++		 * Boot-arg sweetexec=1 keeps it; off by default (klog/ring noise). */
++		{
++			static int log_exec = -1;
++			if (log_exec < 0) {
++				log_exec = 0;
++				(void)PE_parse_boot_argn("sweetexec", &log_exec, sizeof(log_exec));
++			}
++			if (log_exec) {
++				printf("exec %s\n", p->p_name);
++			}
++		}
+ #else
+ 			printf("Allowing spawn of iOS binary %s since it has "
+ 			    "com.apple.private.security.no-sandbox entitlement or unentitled_ios_sim_launch "
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -65,7 +65,7 @@
+ {
+ 	static int chan;
+ 	if (!PE_parse_boot_argn("sweetsample", sweet_sample_names, sizeof(sweet_sample_names))) {
+-		strlcpy(sweet_sample_names, "SpringBoard,backboardd", sizeof(sweet_sample_names));
++		strlcpy(sweet_sample_names, "-", sizeof(sweet_sample_names));
+ 	}
+ 	if (sweet_sample_names[0] == '-') {
+ 		return;
