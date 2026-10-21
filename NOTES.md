@@ -49,6 +49,47 @@ action (needs the user's device): run the canary sequence in
 
 ## Agent handoff / active work (2026-10-15, latest)
 
+### >>> UPDATE 2026-10-21 04:00 (read first: 03:02 boot DID run; dark screen = noconsole flag) <<<
+
+**Boot attempt #1 03:02 with touchtcu1 (TCM kernel d62bd601) did NOT die.** Ring proof
+(`logs/miatoll-2.bin`, total 211810 → 4,533,011 bytes wrapped, flush #138): a full userland
+run happened — SpringBoard scenes/assistivetouchd strings, backboardd threads parked,
+`SWEET AKS` per-call flood (patch 0038, unconditional IOLog per AppleKeyStore call; 1020+
+lines), ReportCrash x645, coreduetd/callservicesd/WirelessRadioManagerd/searchd/dasd/photoanalysisd/
+healthappd crash-loops (cosmetic, like bluetoothd/fairplayd), `SWEET KEYS`/`SWEET HID` key
+events AT THE TAIL (user was holding buttons while the system was still alive). **No panic.**
+- The "экран потух" was our own boot-arg: `sweetfb_noconsole=1` (boot 0069+ had console ON
+  and the Lock Screen rendered on top; without the console refresh the fb path does not
+  present → panel goes black). Same shape as 0077s which also used noconsole.
+- The USB gadget dropping off the bus and UDP silence are still unexplained (gadget state
+  ring lines were overwritten; no SWEET USB/TOUCH/FB/serials survive — the AKS+SMP flood
+  wrapped the 4 MiB ring in ~40 min of runtime).
+- Ring flood sources: 0038 AKS per-call log + 0054 SMP sampler (runs by default!) + exec
+  spam. Gating all three is a small uncommitted TODO (only worth one CI run together with
+  the next real change).
+
+**Next boot image ready: `shim/out/shim-boot-tcmcons.img`** (payload `payload-tcmcons.bin`,
+kernel out-kernel/kernel.development.sweet sha d62bd601, SAME CI run 39517431884 as
+touchtcu1). Cmdline = touchtcu1 minus `sweetfb_noconsole=1`:
+`serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0
+unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1
+launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetusb=2 sweettouchdelay=10`
+(cmdline verified in the image by regex). Procedure for the next boot:
+1. `python3 /tmp/udp_listen.py logs/live-tcmcons.txt &` BEFORE `fastboot boot` (waits up
+   to 120 s for the enx* gadget iface, then binds :5140).
+2. `fastboot boot shim/out/shim-boot-tcmcons.img` — console will be visible on the panel
+   (fb spam) with the Lock Screen on top; touch prints will arrive via UDP ~45 s after
+   boot (`SWEET TOUCH: starting in 45 s` → `SWEET TOUCH: gcc votes=%#x/%#x rcg=%#x cfg=%#x
+   dfs=%#x` → `tcm probe 0x20 err=` → `tcm mode=%u part=%s` → `selected Synaptics TCM`).
+3. If the panel goes dark again — press power/vol keys and watch the ring tail (kernel
+   stays alive); the UDP touch prints are the primary goal, the panel is a bonus.
+
+**After a success or failure: pull the ring again
+(`tools/sweet-log-pull.sh logs/miatoll-3.bin`) — the AKS flood still eats it, so UDP and
+the panel are primary, the ring is a backup. If the probe says "no unique supported IC"
+→ the touch IC is unpowered → PMIC LDO rails are the follow-up (never written from
+software so far; patch 0062 has the D22/L11C RPMh-vote pattern to copy for atoll).
+
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<
 
 **STATE at end of 2026-10-18 (evening):**
