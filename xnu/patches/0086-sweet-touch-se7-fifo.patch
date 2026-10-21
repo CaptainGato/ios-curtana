@@ -1,0 +1,40 @@
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -946,15 +946,34 @@
+ {
+ 	uint32_t fw = touch_rd(st.se, SE_FW);
+ 	uint32_t tx = touch_rd(st.se, SE_HW_TX), rx = touch_rd(st.se, SE_HW_RX);
+-	printf("SWEET TOUCH: se7 fw=%#x proto=%u status=%#x tx=%#x rx=%#x ios=%#x\n",
++	uint32_t fifodis = touch_rd(st.se, 0x64);
++	printf("SWEET TOUCH: se7 fw=%#x proto=%u status=%#x tx=%#x rx=%#x ios=%#x"
++	    " fifodis=%#x dmamode=%#x dmaif=%#x\n",
+ 	    fw, (fw >> 8) & 0xffu, touch_rd(st.se, SE_STATUS), tx, rx,
+-	    touch_rd(st.se, 0x908));
+-	if (((fw >> 8) & 0xffu) != 3u || (touch_rd(st.se, 0x64) & 1u) ||
++	    touch_rd(st.se, 0x908), fifodis, touch_rd(st.se, 0x258),
++	    touch_rd(st.se, 0x2004));
++	if (((fw >> 8) & 0xffu) != 3u ||
+ 	    ((tx >> 24) & 0x3fu) != 32u || ((rx >> 24) & 0x3fu) != 32u ||
+ 	    ((tx >> 16) & 0x3fu) < 2u || ((rx >> 16) & 0x3fu) < 2u) {
+ 		printf("SWEET TOUCH: need ABL-loaded I2C firmware and 32-bit FIFOs; probes skipped\n");
+ 		return false;
+ 	}
++	/*
++	 * ASIC may leave SE7 in the DMA/GPI interface mode (0x64 FIFO_IF_DISABLE
++	 * RO = 1). ABL had loaded the I2C firmware (proto=3), so only the
++	 * interface selector is wrong: clear SE_FIFO_IF_DISABLE (0x2008) and
++	 * GENI_DMA_MODE_EN (0x258) to return to FIFO mode, like upstream
++	 * geni_load_se_fw() FIFO path (DMA_IF_EN stays as the firmware left it).
++	 */
++	if ((fifodis & 1u) || (touch_rd(st.se, 0x258) & 1u)) {
++		printf("SWEET TOUCH: switching SE7 to FIFO mode\n");
++		touch_wr(st.se, 0x2008u, touch_rd(st.se, 0x2008u) & ~1u);
++		touch_wr(st.se, 0x258u, touch_rd(st.se, 0x258u) & ~1u);
++		touch_wait(10);
++		fifodis = touch_rd(st.se, 0x64);
++		printf("SWEET TOUCH: after switch fifodis=%#x dmamode=%#x\n",
++		    fifodis, touch_rd(st.se, 0x258));
++	}
+ 	if (touch_rd(st.se, SE_STATUS) & 0x1001u) {
+ 		printf("SWEET TOUCH: SE7 already busy; probes skipped\n");
+ 		return false;

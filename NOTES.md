@@ -49,6 +49,35 @@ action (needs the user's device): run the canary sequence in
 
 ## Agent handoff / active work (2026-10-15, latest)
 
+**tcmcons (06:16) boot = logs/miatoll-5.bin (1.3 MB, flush #40, unwrapped)** —
+THE FIRST COMPLETE PASS THROUGH clock/SE init:
+	117: SWEET TOUCH: starting in 10 s
+	540: SWEET TOUCH: mapping GCC/TLMM/SE7
+	541: gcc votes pre=0x410043c0/0 post=0x41bc43c0/0xbc0000 (this boot ABL had
+	     already voted bits 6..9,13 — wrap0 clocks were ON from start)
+	545: gcc branch 0x18010 hwcg idle (0x8000000a)   <- 0084 WORKS
+	546: gcc bank=52000..0c 0 0 0x1240d7b 0 wrap0=0/0x8000000a r018141/0
+	547: se7 fw=0x303 proto=3 status=0 tx=0x20102864 rx=0x20104800 ios=0
+	548: need ABL-loaded I2C firmware and 32-bit FIFOs; probes skipped
+- Х miracles in this run: 0085 USB fully present (lines 118+: GDSC usb30_prim,
+  all clocks on, ue0 network up: live UDP console worked; host USB shows
+  "Product: Sweet iOS (USB Ethernet)", cdc_ether enx... bound).
+- fw=0x303, (fw>>8)=3 = I2C protocol — ABL DID load SE7 I2C firmware.
+  tx/rx FIFO depths = 32/40 and 32/8 words — all FOUR original checks pass
+  except `(rd(0x64) & 1)`.
+- FACT (upstream geni-se.h): **0x64 = GENI_IF_FIFO_DISABLE_RO**, bit0 =
+  FIFO_IF_DISABLE — «FIFO-интерфейс SE выключен» (SE в DMA/GPI-режиме).
+  ABL оставил SE7 в DMA-режиме. Upstream geni_load_se_fw() FIFO path clears
+  SE_FIFO_IF_DISABLE (0x**2008**) bit0 and (transfer-level) GENI_DMA_MODE_EN
+  (0x258); DMA_IF_EN (0x2004) stays as-is.
+- **Patch 0086-sweet-touch-se7-fifo.patch**: in touch_se_init() print
+  fifodis/dmamode/dmaif values; drop 0x64&1 from the hard gate and, if the
+  SE is in DMA mode (fifodis bit0 or 0x258 bit0), switch back to FIFO
+  (clear 0x2008 bit0 + 0x258 bit0), wait 10 µs, re-read and continue into
+  the existing SE programming → I2C probe 0x20.
+- Boot ran fine otherwise: SpringBoard userland, live UDP console streamed
+  (ue0 rx 63/64 frames).
+
 ### >>> UPDATE 2026-10-21 05:20 (read first: 0x18010 KEEPSИ ПОСТАВЛЕН — hwcg idle, патч 0084) <<<
 
 **Ring of the gccdiag boot (`logs/miatoll-4.bin`, 685 778 B, flush #22, unwrapped):**
