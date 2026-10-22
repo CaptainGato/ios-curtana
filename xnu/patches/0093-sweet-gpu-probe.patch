@@ -1,0 +1,259 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/sweet_gpu.c
+@@ -0,0 +1,238 @@
++/*
++ * SWEET GPU: a read-only look at the GPU of curtana (Redmi Note 9S, SM7125):
++ * an Adreno 618 (a618, chipid 0x06010800) with its GMU and its own SMMU.
++ *
++ * Boot-arg sweetgpu=N runs steps 1..N; nothing at all by default:
++ *   1  map the blocks the probe reads (kgsl, GPUCC, QFPROM, GMU, SMMU, GCC)
++ *   2  the QFPROM fuses that say which GPU this is (speed bin, gaming bin)
++ *   3  the GPU's own clock controller, as the boot loader left it
++ *   4  the GPU's clocks in the global clock controller (votes and running)
++ *
++ * Nothing here writes to the GPU. The first question this answers is whether
++ * this kernel may touch the block at all (a boot loader may keep it behind a
++ * hypervisor), and an access it dislikes ends the run, sometimes without a
++ * word. Reads come before writes; the write steps come in later patches.
++ *
++ * Addresses are curtana's, from the live FDT: see docs/GPU.md.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern kern_return_t thread_terminate(thread_t);
++
++/* Physical blocks (FDT /soc/qcom,kgsl-3d0@5000000 and friends). */
++#define GPU_KGSL_PA     0x05000000u
++#define GPU_KGSL_SIZE   0x00040000u
++#define GPU_GPUCC_PA    0x05090000u
++#define GPU_GPUCC_SIZE  0x00009000u
++#define GPU_GMU_PA      0x0506a000u
++#define GPU_GMU_SIZE    0x00031000u
++#define GPU_SMMU_PA     0x05040000u
++#define GPU_SMMU_SIZE   0x00010000u
++#define GPU_QFPROM_PA   0x00780000u
++#define GPU_QFPROM_SIZE 0x00006300u
++#define GPU_GCC_PA      0x00100000u
++#define GPU_GCC_SIZE    0x00100000u
++
++/* QFPROM: the corrected region holds the fuses the boot ROM copied. */
++#define QFPROM_CORRECTED   0x4000u
++#define QFPROM_SPEED_BIN   0x1e9u
++#define QFPROM_GAMING_BIN  0x1f5u
++
++/* GPUCC, a618 (same block as sdmmagpie / sm6150). */
++#define GPUCC_PLL0_MODE       0x0000u
++#define GPUCC_PLL1_MODE       0x0100u
++#define GPUCC_CXO_AON_CBCR    0x1004u
++#define GPUCC_GX_SW_RESET     0x1008u
++#define GPUCC_GX_GDSCR        0x100cu
++#define GPUCC_GX_GFX3D_RCGR   0x101cu
++#define GPUCC_GX_CXO_CBCR     0x1060u
++#define GPUCC_GX_GMU_CBCR     0x1064u
++#define GPUCC_CX_GDSCR        0x106cu
++#define GPUCC_AHB_CBCR        0x1078u
++#define GPUCC_CX_APB_CBCR     0x1088u
++#define GPUCC_CX_SNOC_DVM_CBCR 0x108cu
++#define GPUCC_CX_GMU_CBCR     0x1098u
++#define GPUCC_CXO_CBCR        0x109cu
++#define GPUCC_CX_GFX3D_CBCR   0x10a4u
++#define GPUCC_CX_GFX3D_SLV_CBCR 0x10a8u
++#define GPUCC_GMU_RCGR        0x1120u
++#define GPUCC_CB_CBCR         0x1170u
++#define GPUCC_HUB_AON_CBCR    0x1178u
++#define GPUCC_HUB_RCGR        0x117cu
++#define GPUCC_HUB_CX_INT_CBCR 0x1204u
++#define GPUCC_CX_HW_CTRL      0x1540u
++#define GPUCC_GX_DOMAIN_MISC  0x158cu
++#define GPUCC_SMMU_VOTE_CBCR  0x5000u
++
++/* GCC: the GPU's clocks outside the GPU's own controller. */
++#define GCC_PLL_VOTE            0x52000u
++#define GCC_PLL_VOTE_MASK       0x00018000u
++#define GCC_GPU_CFG_AHB_CBCR    0x71004u
++#define GCC_GPU_MEMNOC_GFX_CBCR 0x7100cu
++#define GCC_GPU_SNOC_DVM_GFX_CBCR 0x71018u
++#define GCC_DDRSS_GPU_AXI_CBCR  0x71154u
++
++static vm_offset_t gpu_kgsl, gpu_gpucc, gpu_gmu, gpu_smmu, gpu_qfprom, gpu_gcc;
++static void *gpu_sleep_chan;
++
++static uint32_t
++gpu_rd(vm_offset_t base, uint32_t off)
++{
++	if (base == 0) {
++		return 0xffffffffu;
++	}
++	return *(volatile uint32_t *)(base + off);
++}
++
++static void
++gpu_wait(unsigned ms)
++{
++	uint64_t deadline;
++
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&gpu_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++gpu_step_map(void)
++{
++	gpu_kgsl = ml_io_map(GPU_KGSL_PA, GPU_KGSL_SIZE);
++	gpu_gpucc = ml_io_map(GPU_GPUCC_PA, GPU_GPUCC_SIZE);
++	gpu_gmu = ml_io_map(GPU_GMU_PA, GPU_GMU_SIZE);
++	gpu_smmu = ml_io_map(GPU_SMMU_PA, GPU_SMMU_SIZE);
++	gpu_qfprom = ml_io_map(GPU_QFPROM_PA, GPU_QFPROM_SIZE);
++	gpu_gcc = ml_io_map(GPU_GCC_PA, GPU_GCC_SIZE);
++	printf("SWEET GPU: step 1: kgsl %#llx gpucc %#llx gmu %#llx smmu %#llx "
++	    "qfprom %#llx gcc %#llx\n",
++	    (unsigned long long)gpu_kgsl, (unsigned long long)gpu_gpucc,
++	    (unsigned long long)gpu_gmu, (unsigned long long)gpu_smmu,
++	    (unsigned long long)gpu_qfprom, (unsigned long long)gpu_gcc);
++}
++
++static void
++gpu_step_fuses(void)
++{
++	uint32_t speed = gpu_rd(gpu_qfprom, QFPROM_CORRECTED + QFPROM_SPEED_BIN);
++	uint32_t gaming = gpu_rd(gpu_qfprom, QFPROM_CORRECTED + QFPROM_GAMING_BIN);
++	uint32_t off;
++
++	printf("SWEET GPU: step 2: qfprom speed_bin(%#x) %#x gaming_bin(%#x) %#x\n",
++	    QFPROM_SPEED_BIN, speed, QFPROM_GAMING_BIN, gaming);
++	/* The fuses are a bitfield; show the words around them once. */
++	for (off = 0x1e0; off <= 0x200; off += 4) {
++		printf("SWEET GPU: qfprom[%#x] %#x\n", QFPROM_CORRECTED + off,
++		    gpu_rd(gpu_qfprom, QFPROM_CORRECTED + off));
++	}
++}
++
++static const struct {
++	uint32_t off;
++	const char *name;
++} gpucc_regs[] = {
++	{ GPUCC_PLL0_MODE, "pll0_mode" },
++	{ GPUCC_PLL1_MODE, "pll1_mode" },
++	{ GPUCC_CXO_AON_CBCR, "cxo_aon_cbcr" },
++	{ GPUCC_GX_SW_RESET, "gx_sw_reset" },
++	{ GPUCC_GX_GDSCR, "gx_gdscr" },
++	{ GPUCC_GX_GFX3D_RCGR, "gx_gfx3d_rcgr" },
++	{ GPUCC_GX_CXO_CBCR, "gx_cxo_cbcr" },
++	{ GPUCC_GX_GMU_CBCR, "gx_gmu_cbcr" },
++	{ GPUCC_CX_GDSCR, "cx_gdscr" },
++	{ GPUCC_AHB_CBCR, "ahb_cbcr" },
++	{ GPUCC_CX_APB_CBCR, "cx_apb_cbcr" },
++	{ GPUCC_CX_SNOC_DVM_CBCR, "cx_snoc_dvm_cbcr" },
++	{ GPUCC_CX_GMU_CBCR, "cx_gmu_cbcr" },
++	{ GPUCC_CXO_CBCR, "cxo_cbcr" },
++	{ GPUCC_CX_GFX3D_CBCR, "cx_gfx3d_cbcr" },
++	{ GPUCC_CX_GFX3D_SLV_CBCR, "cx_gfx3d_slv_cbcr" },
++	{ GPUCC_GMU_RCGR, "gmu_rcgr" },
++	{ GPUCC_CB_CBCR, "cb_cbcr" },
++	{ GPUCC_HUB_AON_CBCR, "hub_aon_cbcr" },
++	{ GPUCC_HUB_RCGR, "hub_rcgr" },
++	{ GPUCC_HUB_CX_INT_CBCR, "hub_cx_int_cbcr" },
++	{ GPUCC_CX_HW_CTRL, "cx_hw_ctrl" },
++	{ GPUCC_GX_DOMAIN_MISC, "gx_domain_misc" },
++	{ GPUCC_SMMU_VOTE_CBCR, "smmu_vote_cbcr" },
++};
++
++static void
++gpu_step_gpucc(void)
++{
++	unsigned i;
++
++	for (i = 0; i < sizeof(gpucc_regs) / sizeof(gpucc_regs[0]); i++) {
++		printf("SWEET GPU: gpucc %-20s [%#06x] %#x\n", gpucc_regs[i].name,
++		    gpucc_regs[i].off, gpu_rd(gpu_gpucc, gpucc_regs[i].off));
++	}
++}
++
++static void
++gpu_step_gcc(void)
++{
++	uint32_t vote = gpu_rd(gpu_gcc, GCC_PLL_VOTE);
++
++	printf("SWEET GPU: step 4: gcc gpu_pll_vote %#x (bits 15/16 %s)\n", vote,
++	    (vote & GCC_PLL_VOTE_MASK) == GCC_PLL_VOTE_MASK ? "on" : "off");
++	printf("SWEET GPU: gcc cfg_ahb_cbcr       %#x\n",
++	    gpu_rd(gpu_gcc, GCC_GPU_CFG_AHB_CBCR));
++	printf("SWEET GPU: gcc memnoc_gfx_cbcr    %#x\n",
++	    gpu_rd(gpu_gcc, GCC_GPU_MEMNOC_GFX_CBCR));
++	printf("SWEET GPU: gcc snoc_dvm_gfx_cbcr  %#x\n",
++	    gpu_rd(gpu_gcc, GCC_GPU_SNOC_DVM_GFX_CBCR));
++	printf("SWEET GPU: gcc ddrss_gpu_axi_cbcr %#x\n",
++	    gpu_rd(gpu_gcc, GCC_DDRSS_GPU_AXI_CBCR));
++}
++
++static void
++gpu_thread(void *arg __unused)
++{
++	uint32_t step = 1, delay_s = 5;
++
++	(void)PE_parse_boot_argn("sweetgpu", &step, sizeof(step));
++	(void)PE_parse_boot_argn("sweetgpudelay", &delay_s, sizeof(delay_s));
++	printf("SWEET GPU: probe up to step %u, starting in %u s\n", step, delay_s);
++	gpu_wait(delay_s * 1000u);
++
++	gpu_step_map();
++	if (step >= 2) {
++		gpu_step_fuses();
++	}
++	if (step >= 3) {
++		gpu_step_gpucc();
++	}
++	if (step >= 4) {
++		gpu_step_gcc();
++	}
++	printf("SWEET GPU: probe done (steps 1..%u)\n", step);
++	thread_terminate(current_thread());
++}
++
++void
++sweet_gpu_boot_probe(void)
++{
++	uint32_t step = 0;
++	thread_t thread;
++	kern_return_t kr;
++
++	(void)PE_parse_boot_argn("sweetgpu", &step, sizeof(step));
++	if (step == 0) {
++		return;		/* the GPU is left alone */
++	}
++	kr = kernel_thread_start(gpu_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("SWEET GPU: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -800,7 +800,11 @@
+ 	bsd_autoconf();
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 	extern void sweet_touch_boot_probe(void);
+ 	sweet_touch_boot_probe();
+ #endif
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	extern void sweet_gpu_boot_probe(void);
++	sweet_gpu_boot_probe();
++#endif
+ 
+ #if CONFIG_DTRACE
