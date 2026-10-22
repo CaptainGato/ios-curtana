@@ -1,0 +1,15 @@
+diff --git a/bsd/skywalk/nexus/nexus_syscalls.c b/bsd/skywalk/nexus/nexus_syscalls.c
+--- a/bsd/skywalk/nexus/nexus_syscalls.c
++++ b/bsd/skywalk/nexus/nexus_syscalls.c
+@@ -218,7 +218,10 @@
+ 	lck_mtx_unlock(&nxctl->nxctl_lock);
+ 	if (__improbable(nxprov == NULL)) {
+ 		ASSERT(err != 0);
+-		SK_DSC(p, "nxprov_create: %d", err);
++		/* SWEET: daemons without a Skywalk provider (identityservicesd,
++		 * rapportd) call this in a loop; the unthrottled SK_ERR line
++		 * floods the console and hides the boot log. */
++		SK_RDERR(1, "nxprov_create: %d", err);
+ 		goto done;
+ 	}
+ 
