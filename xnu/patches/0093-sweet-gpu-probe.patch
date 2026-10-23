@@ -1,34 +1,12 @@
-diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
-new file mode 100644
---- /dev/null
-+++ b/bsd/dev/sweet_gpu.c
-@@ -0,0 +1,238 @@
-+/*
-+ * SWEET GPU: a read-only look at the GPU of curtana (Redmi Note 9S, SM7125):
-+ * an Adreno 618 (a618, chipid 0x06010800) with its GMU and its own SMMU.
-+ *
-+ * Boot-arg sweetgpu=N runs steps 1..N; nothing at all by default:
-+ *   1  map the blocks the probe reads (kgsl, GPUCC, QFPROM, GMU, SMMU, GCC)
-+ *   2  the QFPROM fuses that say which GPU this is (speed bin, gaming bin)
-+ *   3  the GPU's own clock controller, as the boot loader left it
-+ *   4  the GPU's clocks in the global clock controller (votes and running)
-+ *
-+ * Nothing here writes to the GPU. The first question this answers is whether
-+ * this kernel may touch the block at all (a boot loader may keep it behind a
-+ * hypervisor), and an access it dislikes ends the run, sometimes without a
-+ * word. Reads come before writes; the write steps come in later patches.
-+ *
-+ * Addresses are curtana's, from the live FDT: see docs/GPU.md.
-+ */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
-+#include <sys/param.h>
-+#include <sys/systm.h>
-+#include <sys/errno.h>
-+#include <kern/clock.h>
-+#include <kern/thread.h>
-+#include <kern/sched_prim.h>
-+#include <machine/machine_routines.h>
-+#include <pexpert/pexpert.h>
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -1429,5 +1429,218 @@
+ 	if (on) {
+ 		sweet_touch_init();
+ 	}
++	extern void sweet_gpu_boot_probe(void);
++	sweet_gpu_boot_probe();
+ }
 +
 +extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 +extern kern_return_t thread_terminate(thread_t);
@@ -240,29 +218,4 @@ new file mode 100644
 +		printf("SWEET GPU: kernel_thread_start failed %d\n", kr);
 +	}
 +}
-+#endif /* ARM64_BOARD_CONFIG_SWEET */
-diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
---- a/bsd/kern/bsd_init.c
-+++ b/bsd/kern/bsd_init.c
-@@ -800,7 +800,11 @@
- 	bsd_autoconf();
- 
- #if defined(ARM64_BOARD_CONFIG_SWEET)
- 	extern void sweet_touch_boot_probe(void);
- 	sweet_touch_boot_probe();
- #endif
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
-+	extern void sweet_gpu_boot_probe(void);
-+	sweet_gpu_boot_probe();
-+#endif
- 
- #if CONFIG_DTRACE
-diff --git a/bsd/conf/files b/bsd/conf/files
---- a/bsd/conf/files
-+++ b/bsd/conf/files
-@@ -109,4 +109,5 @@
- bsd/dev/sweet_sample.c			standard
- bsd/dev/sweet_keys.c			standard
- bsd/dev/sweet_touch.c			standard
-+bsd/dev/sweet_gpu.c			standard
- bsd/dev/mem.c				standard
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
