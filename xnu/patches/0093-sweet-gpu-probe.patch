@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -1429,5 +1429,219 @@
+@@ -1429,5 +1429,280 @@
  	if (on) {
  		sweet_touch_init();
  	}
@@ -178,6 +178,58 @@
 +}
 +
 +static void
++gpu_wr32(vm_offset_t base, uint32_t off, uint32_t value)
++{
++	*(volatile uint32_t *)(base + off) = value;
++}
++
++static void
++gpu_step_cx_power(void)
++{
++	uint32_t v = gpu_rd(gpu_gpucc, GPUCC_CX_HW_CTRL);
++
++	printf("SWEET GPU: step 5: cx_hw_ctrl before %#x\n", v);
++	gpu_wr32(gpu_gpucc, GPUCC_CX_HW_CTRL, v | 0x80000000u);
++	gpu_wait(5);
++	printf("SWEET GPU: step 5: cx_hw_ctrl after  %#x\n",
++	    gpu_rd(gpu_gpucc, GPUCC_CX_HW_CTRL));
++}
++
++static void
++gpu_clock_on(const char *name, uint32_t off)
++{
++	uint32_t v = gpu_rd(gpu_gpucc, off);
++
++	gpu_wr32(gpu_gpucc, off, v | 1u);
++	gpu_wait(2);
++	printf("SWEET GPU: clock %-16s [%#06x] %#x -> %#x\n", name, off, v,
++	    gpu_rd(gpu_gpucc, off));
++}
++
++static void
++gpu_step_clocks(void)
++{
++	gpu_clock_on("ahb", GPUCC_AHB_CBCR);
++	gpu_clock_on("cx_gmu", GPUCC_CX_GMU_CBCR);
++	gpu_clock_on("cxo", GPUCC_CXO_CBCR);
++	gpu_clock_on("cxo_aon", GPUCC_CXO_AON_CBCR);
++	gpu_clock_on("smmu_vote", GPUCC_SMMU_VOTE_CBCR);
++}
++
++static void
++gpu_step_cores(void)
++{
++	uint32_t i;
++
++	printf("SWEET GPU: step 7: gmu %#x %#x %#x %#x\n",
++	    gpu_rd(gpu_gmu, 0x0), gpu_rd(gpu_gmu, 0x4),
++	    gpu_rd(gpu_gmu, 0x8), gpu_rd(gpu_gmu, 0xc));
++	for (i = 0; i < 8; i++) {
++		printf("SWEET GPU: smmu idr%u %#x\n", i, gpu_rd(gpu_smmu, 0x020 + 4u * i));
++	}
++}
++
++static void
 +gpu_thread(void *arg __unused)
 +{
 +	uint32_t step = 1, delay_s = 5;
@@ -196,6 +248,15 @@
 +	}
 +	if (step >= 4) {
 +		gpu_step_gcc();
++	}
++	if (step >= 5) {
++		gpu_step_cx_power();
++	}
++	if (step >= 6) {
++		gpu_step_clocks();
++	}
++	if (step >= 7) {
++		gpu_step_cores();
 +	}
 +	printf("SWEET GPU: probe done (steps 1..%u)\n", step);
 +	thread_terminate(current_thread());
