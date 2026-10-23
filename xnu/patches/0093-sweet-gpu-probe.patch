@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -1429,5 +1429,280 @@
+@@ -1429,5 +1429,286 @@
  	if (on) {
  		sweet_touch_init();
  	}
@@ -186,7 +186,13 @@
 +static void
 +gpu_step_cx_power(void)
 +{
-+	uint32_t v = gpu_rd(gpu_gpucc, GPUCC_CX_HW_CTRL);
++	extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
++	int cx_err = sweet_rpmh_vreg_enable("cx", 6);
++	int mx_err = sweet_rpmh_vreg_enable("mx", 6);
++	uint32_t v;
++
++	printf("SWEET GPU: step 5: rpmh cx=%d mx=%d\n", cx_err, mx_err);
++	v = gpu_rd(gpu_gpucc, GPUCC_CX_HW_CTRL);
 +
 +	printf("SWEET GPU: step 5: cx_hw_ctrl before %#x\n", v);
 +	gpu_wr32(gpu_gpucc, GPUCC_CX_HW_CTRL, v | 0x80000000u);
