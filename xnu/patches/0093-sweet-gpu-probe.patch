@@ -260,11 +260,9 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
-@@ -109,6 +109,7 @@
+@@ -109,4 +109,5 @@
  bsd/dev/sweet_sample.c			standard
  bsd/dev/sweet_keys.c			standard
  bsd/dev/sweet_touch.c			standard
 +bsd/dev/sweet_gpu.c			standard
  bsd/dev/mem.c				standard
- bsd/dev/munge.c 			optional config_requires_u32_munging
- bsd/dev/unix_startup.c			standard
