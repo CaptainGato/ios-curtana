@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -1429,5 +1429,218 @@
+@@ -1429,5 +1429,219 @@
  	if (on) {
  		sweet_touch_init();
  	}
@@ -105,8 +105,9 @@
 +static void
 +gpu_step_fuses(void)
 +{
-+	uint32_t speed = gpu_rd(gpu_qfprom, QFPROM_CORRECTED + QFPROM_SPEED_BIN);
-+	uint32_t gaming = gpu_rd(gpu_qfprom, QFPROM_CORRECTED + QFPROM_GAMING_BIN);
++	/* the fuse offsets are not word aligned: read the word that holds them */
++	uint32_t speed = gpu_rd(gpu_qfprom, QFPROM_CORRECTED + (QFPROM_SPEED_BIN & ~3u));
++	uint32_t gaming = gpu_rd(gpu_qfprom, QFPROM_CORRECTED + (QFPROM_GAMING_BIN & ~3u));
 +	uint32_t off;
 +
 +	printf("SWEET GPU: step 2: qfprom speed_bin(%#x) %#x gaming_bin(%#x) %#x\n",
