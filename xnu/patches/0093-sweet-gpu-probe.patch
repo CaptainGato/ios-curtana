@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -1429,5 +1429,734 @@
+@@ -1429,5 +1429,766 @@
  	if (on) {
  		sweet_touch_init();
  	}
@@ -289,6 +289,38 @@
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 +
 +/* RPMh vote path, embedded here because bsd/dev/sweet_rpmh.c is not in the CI tree */
++#define RH_RSC_PA       0x18220000u
++#define RH_TCS_PA       0x18220d00u
++#define RH_TCS_SIZE     0x3000u
++#define RH_DICT_PA      0x0c3f000cu
++#define RH_DRV          2u
++#define RH_ACTIVE_N     2u       /* DT order: ACTIVE 2, SLEEP 3, WAKE 3 */
++#define RH_NORMAL_N     8u       /* hidden CONTROL TCS is not in this bank */
++#define RH_TCS_STRIDE   0x2a0u
++#define RH_CMD_STRIDE   0x14u
++#define RH_IRQ_EN       0x00u
++#define RH_IRQ_STATUS   0x04u
++#define RH_IRQ_CLEAR    0x08u
++#define RH_WAIT         0x10u
++#define RH_CONTROL      0x14u
++#define RH_STATUS       0x18u
++#define RH_ENABLE       0x1cu
++#define RH_MSGID        0x30u
++#define RH_ADDR         0x34u
++#define RH_DATA         0x38u
++#define RH_CMD_STATUS   0x3cu
++#define RH_AMC_EN       (1u << 16)
++#define RH_TRIGGER      (1u << 24)
++#define RH_ISSUED       (1u << 8)
++#define RH_COMPLETE     (1u << 16)
++#define RH_WRITE_ACK    (8u | (1u << 8) | (1u << 16))
++#define RH_DB_MAGIC     0x0c0330dbu
++#define RH_DB_HEADER    144u
++#define RH_DB_ENTRY     24u
++#define RH_DB_MAX       0x100000u /* policy bound, not a DT size */
++#define RH_VRM          4u
++#define RH_TIMEOUT_US   100000u
++
 +static vm_offset_t grh_rsc, grh_tcs, grh_dict, grh_db;
 +static uint32_t grh_db_size;
 +static unsigned grh_ncpt;
