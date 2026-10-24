@@ -1,0 +1,12 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index e192355..3ef4c21 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -922,6 +922,7 @@ touch_nvt_print_id(const char *tag, unsigned n)
+ {
+ 	uint8_t id[6] = {0};
+ 	touch_nvt_page(NVT_ID_PAGE);
++	printf("SWEET TOUCH: NVT lv rst=%d irq=%d miso=%d\n", spi_level(TOUCH_SPI_RST), spi_level(TOUCH_SPI_IRQ), spi_level(spi_miso));
+ 	touch_nvt_read(NVT_ID_REG, id, 6);
+ 	printf("SWEET TOUCH: NVT %s %u id %02x %02x %02x %02x %02x %02x%s\n",
+ 		tag, n, id[0], id[1], id[2], id[3], id[4], id[5],
