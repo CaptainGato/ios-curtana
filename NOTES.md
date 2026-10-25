@@ -1246,3 +1246,70 @@ FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
    el touch FUNCIONA end-to-end (SpringBoard recibue eventos via
    SweetHIDTouch). blindarse de una ronda mas solo si el mapeo ejes/ID
    requiere calibracion.
+
+## >>> 2026-10-25 tarde-5: CAUSA RAIZ del touch muerto confirmada; firmware extraido; parche 0101 (FW DOWNLOAD) en CI <<<
+
+### Diagnostico del ring nvt8 (ring_raw6.bin)
+- Poll de EVENT_BUF (0x22D00) vivo a 100Hz y lee, pero el contenido es
+  CONSTANTE (a7 5e 20 3a 53 a8 01 ef... en rep 41..70): el IC NO publica
+  eventos -> el firmware del IC no esta corriendo (probable al bootloader
+  esperando descarga por SPI).
+
+/* Ya confirmado por el driver vendor: sirve como evidencia de giro a FW download */
+
+### Descubrimientos (leidos de J. android_kernel_xiaomi_vayu nt36672c + miatoll-ref)
+- El driver vendor DESCARGA el firmware en CADA boot (Boot_Update_Firmware ->
+  nvt_update_firmware -> nvt_download_firmware_{,hw_crc}). No viene de flash.
+- NT36675 (trim id ...75 66 03) usa mmap NT36675_memory_map y
+  hw_info = {carrier_system 2, hw_crc 2} -> path de descarga hw_crc:
+    bootloader_reset (swrst 0x69 @0x3f0fe + SPI_RD_FAST off) ->
+    write_firmware (particiones a SRAM) ->
+    set_bld_hw_crc ( banks ILM/DLM: DES/LENGTH/GCRC en ventana 0x7e2) ->
+    bld_crc_enable (bit7 @0x3f30e) ->
+    fw_crc_enable (0 @0x22d60, 0xAE @0x22d50) ->
+    boot_ready (1 @0x3f10d, 5ms) -> check_reset_state entre [0xA0,0xAF] (10x10ms);
+    reintentos x3. vendor NO hace checksum por SW en el path hw_crc.
+- Valores bin novatek_ts_tianma_fw.bin (curtana tianma, md5
+  b5ce2a6298aa725ebf6e5ffaec9409f8, 139264 bytes):
+    ILM bin[0x00100..0x13f60)  SRAM 0x00000 size 0x013e5f crc 0x85264bf3
+    DLM bin[0x18100..0x1c108)  SRAM 0x27140 size 0x0041a7 crc 0xdf2f7896
+    HDR bin[0x00000..0x00100)  SRAM 0x27040 size 0x0000ff (copia de cabecera)
+  (vendor transfiere size+1 bytes por particion!). Resto Info-0..11 size 0.
+- nvt_set_page: [0xff][addr>>15][addr>>7]; reg bytes = addr&0x7f.
+  Ventana XRAM = 0x80 bytes => escribimos en chunks alineados a 0x80 con
+  re-page (no dependemos del autoincremento de 63KB del hardware).
+
+### El parche 0101-sweet-touch-nvt-fw-download.patch (commit b138491, CI
+run 40195197721)
+- Reemplaza toda la region del probe (post-0100) por:
+  embebido nvt_fw_{hdr,ilm,dlm} (98 KB binario total) como arrays C
+  (patch de 621 KB), helpers blk_write/blk_read por direccion, fw_put
+  chunked 128B, bld_bank, crc enables, boot_ready, check_reset_state,
+  download con 3 intentos, fw_info@0x22d78, poll_loop (mismo cuerpo de
+  0100, solo entra si download OK), probe que llama a eso.
+- Verificado: cadena 0097-0100 aplicada a arbol CI produjo EXACTAMENTE
+  el mismo buildtree source (byte-equal); 0101 aplica limpio; balance 0;
+  markers: nvt_fw_ilm, touch_nvt_download, NVT bld attempt, NVT fw info,
+  reset state 0x, NVT_BOOT_RDY, poll_loop.
+	- Copias del bin en /home/cg/work-ci/firmware/ y Windows
+	/logs/firmware/ (tb focaltech huaxing; mp tianma). Los bins NO
+	entran al git (regla: no subir dumps/aiones del telefono).
+
+### Validacion del kernel tras CI (script mkboot-nvt9.sh <run>)
+1. grep buildtree: touch_nvt_download / nvt_fw_ilm presentes (binario no
+   verificable textualmente en .o, markers son del source).
+2. mkpayload kernel + sweet-nvt5.adt + cmdline nvt5 -> shim-boot-nvt9.
+3. Ring esperado (grep):
+   'NVT bld attempt 1: bootloader reset'
+   'NVT bld attempt 1: SRAM programmed'
+   'NVT bld attempt 1: waiting reset state'
+   'NVT bld: reset state 0xa? OK'
+   'NVT bld: firmware downloaded and booted'
+   'NVT fw info: ver=..'  (ver+~ver==0xff saludable; else BROKEN)
+   luego 'selected Novatek NT36675 over SPI' -> TOCAR -> 'NVT rep N' CAMBIANTES.
+4. Si reset state se queda pegado: leer el ring (state value) y probar
+   eng_reset (0x5A @0x7fff80) previo a bootloader_reset (path non-hw_crc
+   del vendor) como siguiente variente.
+5. Si fw info saludable pero 'NVT rep' sigue constante: puede faltar el
+   handshake del vendor (leer 0x22d51 (sub cmd) o limpiar despues de leer;
+   en el driver el IRQ handler solo lee 66B; probar wdt/E later).
