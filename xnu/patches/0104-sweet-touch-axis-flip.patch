@@ -1,0 +1,25 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 18a3959..668a0b2 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -7353,6 +7353,9 @@ touch_nvt_poll_loop(void)
+ {
+ 	uint8_t rep[68] = {0};
+ 	unsigned reports = 0, dumps = 0;
++		int xf = 0;
++		(void)PE_parse_boot_argn("sweettouchxf", &xf, sizeof(xf));
++		printf("SWEET TOUCH: NVT xf=%d\n", xf);
+ 		unsigned rej = 0, mx = 0, my = 0, mxp = 0;
+ 
+ 	while (!st.dead) {
+@@ -7387,8 +7390,8 @@ touch_nvt_poll_loop(void)
+ 				continue;
+ 			}
+ 			mask |= 1u << id;
+-			x[id] = (int)px;
+-			y[id] = (int)py;
++			x[id] = (xf & 1) ? 1079 - (int)px : (int)px;
++				y[id] = (xf & 2) ? 2399 - (int)py : (int)py;
+ 		}
+ 		/* limited validation dump: full first reads that carry touches */
+ 		if (dumps < 30u && (mask || reports > 40u)) {
