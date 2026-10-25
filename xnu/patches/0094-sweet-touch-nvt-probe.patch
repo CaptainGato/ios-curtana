@@ -2,135 +2,120 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 index af0491f..833eee3 100644
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -850,6 +850,113 @@ touch_spi_pins(unsigned order)
-        delay(20000);
+@@ -850,6 +850,102 @@ touch_spi_pins(unsigned order)
+ 	delay(20000);
  }
  
-+/* ---- Novatek NT36675 Touch Processing for ios-curtana ---- */
-+#define NVT_SWRST_N8 0x3f0feu
-+#define NVT_RD_FAST  0x3f310u
-+#define NT36675_EVENT_BUF_ADDR 0x22D00
-+#define NT36XXX_POINT_DATA_LEN 65
-+#define TOUCH_MAX_FINGER_NUM   10
++/* ---- Novatek NT36xxx on the same bit-banged SPI bus (Redmi Note 9S) ----
++ * Probe only: software reset + chip id. GPIO 8 (reset) is deliberately not
++ * driven: on Novatek panels it may be shared with the display reset. */
++#define NVT_SWRST_N8 0x3f0feu /* DT novatek,swrst-n8-addr */
++#define NVT_RD_FAST  0x3f310u /* DT novatek,spi-rd-fast-addr */
++#define NVT_ID_PAGE  0x1f64eu
++#define NVT_ID_REG   0x4eu
 +
++/* vendor CTP_SPI_WRITE: [reg|0x80][data...] */
 +static void
 +touch_nvt_write(uint8_t reg, const uint8_t *d, unsigned len)
 +{
-+       uint8_t tx[8] = {0};
-+       if (len > 6u) return;
-+       tx[0] = (uint8_t)(reg | 0x80u);
-+       for (unsigned i = 0; i < len; ++i) tx[1 + i] = d[i];
-+       spi_frame(tx, NULL, 1u + len);
++	uint8_t tx[8] = {0};
++	if (len > 6u) {
++		return;
++	}
++	tx[0] = (uint8_t)(reg | 0x80u);
++	for (unsigned i = 0; i < len; ++i) {
++		tx[1 + i] = d[i];
++	}
++	spi_frame(tx, NULL, 1u + len);
 +}
 +
++/* vendor CTP_SPI_READ: [reg&0x7f][dummy][data...], data starts at rx[2] */
 +static void
 +touch_nvt_read(uint8_t reg, uint8_t *out, unsigned len)
 +{
-+       uint8_t tx[16] = {0}, rx[16] = {0};
-+       if (len > 12u) return;
-+       tx[0] = (uint8_t)(reg & 0x7fu);
-+       spi_frame(tx, rx, 2u + len);
-+       for (unsigned i = 0; i < len; ++i) out[i] = rx[2u + i];
++	uint8_t tx[16] = {0}, rx[16] = {0};
++	if (len > 12u) {
++		return;
++	}
++	tx[0] = (uint8_t)(reg & 0x7fu);
++	spi_frame(tx, rx, 2u + len);
++	for (unsigned i = 0; i < len; ++i) {
++		out[i] = rx[2u + i];
++	}
 +}
 +
 +static void
 +touch_nvt_page(uint32_t addr)
 +{
-+       uint8_t b[2] = { (uint8_t)(addr >> 15), (uint8_t)(addr >> 7) };
-+       touch_nvt_write(0xff, b, 2);
++	uint8_t b[2] = { (uint8_t)(addr >> 15), (uint8_t)(addr >> 7) };
++	touch_nvt_write(0xff, b, 2);
 +}
 +
 +static void
 +touch_nvt_write_addr(uint32_t addr, uint8_t v)
 +{
-+       touch_nvt_page(addr);
-+       touch_nvt_write((uint8_t)(addr & 0x7fu), &v, 1);
++	touch_nvt_page(addr);
++	touch_nvt_write((uint8_t)(addr & 0x7fu), &v, 1);
 +}
 +
-+static void
-+touch_nvt_read_buffer(uint32_t addr, uint8_t *buf, unsigned len)
-+{
-+       touch_nvt_page(addr);
-+       touch_nvt_read((uint8_t)(addr & 0x7fu), buf, len);
-+}
-+
++/* Same pads as touch_spi_pins(), but GPIO 8/9 are left as ABL set them. */
 +static void
 +touch_nvt_pins(unsigned order)
 +{
-+       spi_mosi = touch_spi_order[order][0];
-+       spi_miso = touch_spi_order[order][1];
-+       spi_clk = touch_spi_order[order][2];
-+       spi_cs = touch_spi_order[order][3];
-+       spi_out(spi_cs, 1, 6);
-+       spi_out(spi_clk, 0, 6);
-+       spi_out(spi_mosi, 0, 6);
-+       spi_in(spi_miso, 3);
-+       delay(2000);
++	spi_mosi = touch_spi_order[order][0];
++	spi_miso = touch_spi_order[order][1];
++	spi_clk = touch_spi_order[order][2];
++	spi_cs = touch_spi_order[order][3];
++	spi_out(spi_cs, 1, 6);
++	spi_out(spi_clk, 0, 6);
++	spi_out(spi_mosi, 0, 6);
++	spi_in(spi_miso, 3);
++	delay(2000);
 +}
 +
 +static void
-+touch_nvt_process_frame(void)
++touch_nvt_print_id(const char *tag, unsigned n)
 +{
-+       uint8_t point[NT36XXX_POINT_DATA_LEN + 1] = {0};
-+       int x[TOUCH_MAX_FINGER_NUM] = {0};
-+       int y[TOUCH_MAX_FINGER_NUM] = {0};
-+       uint32_t mask = 0;
-+
-+       touch_nvt_read_buffer(NT36675_EVENT_BUF_ADDR, point, NT36XXX_POINT_DATA_LEN);
-+
-+       if (point[0] == 0xFD || point[0] == 0xFE || point[0] == 0x77) {
-+               return;
-+       }
-+
-+       for (int i = 0; i < TOUCH_MAX_FINGER_NUM; i++) {
-+               unsigned int ppos = 6 * i + 1;
-+               uint8_t input_id = point[ppos + 0] >> 3;
-+
-+               if ((input_id == 0) || (input_id > TOUCH_MAX_FINGER_NUM)) continue;
-+
-+               if (((point[ppos] & 0x07) == 0x01) || ((point[ppos] & 0x07) == 0x02)) {
-+                       int px = (point[ppos + 1] << 4) + (point[ppos + 3] >> 4);
-+                       int py = (point[ppos + 2] << 4) + (point[ppos + 3] & 0xf);
-+
-+                       if (px <= 1080 && py <= 2400) {
-+                               int slot = input_id - 1;
-+                               x[slot] = px;
-+                               y[slot] = py;
-+                               mask |= (1U << slot);
-+                       }
-+               }
-+       }
-+       touch_report(mask, x, y);
++	uint8_t id[6] = {0};
++	touch_nvt_page(NVT_ID_PAGE);
++	touch_nvt_read(NVT_ID_REG, id, 6);
++	printf("SWEET TOUCH: NVT %s %u id %02x %02x %02x %02x %02x %02x%s\n",
++		tag, n, id[0], id[1], id[2], id[3], id[4], id[5],
++		(id[3] == 0x75 && id[4] == 0x66 && id[5] == 0x03) ? " = NT36675" : "");
 +}
 +
 +static void
-+touch_nvt_poll_loop(void)
++touch_nvt_probe(void)
 +{
-+       printf("SWEET TOUCH: NVT active touch polling started (NT36675)\n");
-+       touch_nvt_write_addr(NVT_SWRST_N8, 0x69);
-+       touch_wait(10);
-+       touch_nvt_write_addr(NVT_RD_FAST, 0x00);
-+       touch_wait(20);
-+       while (1) {
-+               touch_nvt_process_frame();
-+               touch_wait(8);
-+       }
++	printf("SWEET TOUCH: NVT probe, software reset only (GPIO 8 untouched)\n");
++	for (unsigned i = 0; i < 5; ++i) {
++		touch_nvt_write_addr(NVT_SWRST_N8, 0x69);
++		touch_wait(5);
++		touch_nvt_write_addr(NVT_RD_FAST, 0x00);
++		touch_nvt_print_id("reset", i);
++		touch_wait(10);
++	}
++	/* repeat every 3 s for 3 min so the line can be caught on the panel */
++	for (unsigned n = 0; n < 60; ++n) {
++		touch_wait(3000);
++		touch_nvt_print_id("poll", n);
++	}
 +}
 +
  /* Reset, then read the application chip ids. EIO if the IC never answers. */
  static int
  touch_fts_spi_start(void)
-@@ -1541,6 +1648,13 @@ touch_thread(void *arg, wait_result_t result)
-                printf("SWEET TOUCH: SPI bit-bang order %u (pins %u/%u/%u/%u)\n",
-                    order, touch_spi_order[order][0], touch_spi_order[order][1],
-                    touch_spi_order[order][2], touch_spi_order[order][3]);
-+               int nvt_mode = 0;
-+               (void)PE_parse_boot_argn("sweetnvt", &nvt_mode, sizeof(nvt_mode));
-+               if (nvt_mode) {
-+                       touch_nvt_pins(order);
-+                       touch_nvt_poll_loop();
-+                       goto out;
-+               }
-                touch_spi_pins(order);
-                if (touch_fts_fw_load()) {
-                    printf("SWEET TOUCH: no FTS app; stopping\n");
+@@ -1541,6 +1637,13 @@ touch_thread(void *arg, wait_result_t result)
+ 		printf("SWEET TOUCH: SPI bit-bang order %u (pins %u/%u/%u/%u)\n",
+ 		    order, touch_spi_order[order][0], touch_spi_order[order][1],
+ 		    touch_spi_order[order][2], touch_spi_order[order][3]);
++		int nvt_mode = 0;
++		(void)PE_parse_boot_argn("sweetnvt", &nvt_mode, sizeof(nvt_mode));
++		if (nvt_mode) {
++			touch_nvt_pins(order);
++			touch_nvt_probe();
++			goto out;
++		}
+ 		touch_spi_pins(order);
+ 		if (touch_fts_fw_load()) {
+ 			printf("SWEET TOUCH: no FTS app; stopping\n");

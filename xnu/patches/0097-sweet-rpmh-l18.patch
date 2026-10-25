@@ -1,30 +1,39 @@
---- a/bsd/conf/files
-+++ b/bsd/conf/files
-@@ -108,6 +108,7 @@
- bsd/dev/sweet_sample.c			standard
- bsd/dev/sweet_keys.c			standard
- bsd/dev/sweet_touch.c			standard
-+bsd/dev/sweet_rpmh.c			standard
- bsd/dev/mem.c				standard
- bsd/dev/munge.c 			optional config_requires_u32_munging
- bsd/dev/unix_startup.c			standard
---- /dev/null
-+++ b/bsd/dev/sweet_rpmh.c
-@@ -0,0 +1,358 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index abd95e6..5ac5450 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -15,6 +15,7 @@
+ #include <machine/machine_routines.h>
+ #include <pexpert/pexpert.h>
+ #include "sweet_fts_fw.h"
++int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ /* Mach MIG declaration is not included by BSD's exported thread.h. */
+@@ -890,6 +891,11 @@ static void
+ touch_nvt_probe(void)
+ {
+ 	printf("SWEET TOUCH: NVT probe, software reset only (GPIO 8 untouched)\n");
++	{
++		int rc = sweet_rpmh_vreg_enable("ldoa18", 1800);
++		printf("SWEET TOUCH: NVT l18 enable rc=%d\n", rc);
++		touch_wait(100);
++	}
+ 	for (unsigned i = 0; i < 5; ++i) {
+ 		touch_nvt_write_addr(NVT_SWRST_N8, 0x69);
+ 		touch_wait(5);
+@@ -1746,4 +1752,356 @@ sweet_touch_boot_probe(void)
+ 		sweet_touch_init();
+ 	}
+ }
++
++/* RPMh VRM client (from 0062, which CI skips), appended here */
 +/*
 + * SWEET PM6150L L11C bring-up; see report.md for DT and source evidence.
 + * Sole XNU apps-DRV owner, called from thread context with deep idle disabled.
 + * No sleep/wake programming, SPMI writes, GIC handler, or timeout recovery.
 + */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
-+#include <sys/param.h>
-+#include <sys/systm.h>
-+#include <sys/errno.h>
-+#include <kern/clock.h>
-+#include <machine/machine_routines.h>
 +
-+extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
-+int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
 +
 +/* Live downstream DT has two positional reg entries, no reg-names. */
 +#define RH_RSC_PA       0x18220000u
@@ -368,4 +377,5 @@
 +	__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
 +	return error;
 +}
-+#endif /* ARM64_BOARD_CONFIG_SWEET */
++
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
