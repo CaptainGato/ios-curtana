@@ -1,0 +1,31 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index e40b8ed..37c9997 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -7336,6 +7336,7 @@ touch_nvt_poll_loop(void)
+ {
+ 	uint8_t rep[68] = {0};
+ 	unsigned reports = 0, dumps = 0;
++		unsigned rej = 0, mx = 0, my = 0, mxp = 0;
+ 
+ 	while (!st.dead) {
+ 		uint32_t mask = 0;
+@@ -7355,7 +7356,17 @@ touch_nvt_poll_loop(void)
+ 				continue;
+ 			}
+ 			/* curtana panel is 1080x2340; reject obvious garbage frames */
+-			if (px > 1079u || py > 2339u) {
++			if (px > mx || py > my) {
++					if (px > mx) { mx = px; }
++					if (py > my) { my = py; }
++					if (mxp++ < 40u) {
++						printf("SWEET TOUCH: NVT max x=%u y=%u\n", mx, my);
++					}
++				}
++				if (px > 1079u || py > 2399u) {
++					if (rej++ < 20u) {
++						printf("SWEET TOUCH: NVT reject x=%u y=%u\n", px, py);
++					}
+ 				continue;
+ 			}
+ 			mask |= 1u << id;
