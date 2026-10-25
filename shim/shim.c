@@ -389,13 +389,15 @@ void shim_main(uint64_t dtb)
 #endif
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
+#if defined(TOUCH_PROBE) && TOUCH_PROBE
 	stage = "loader";
-	if (TOUCH_PROBE)
-		con_str("SHIM", "sweet milestone 4: xnu loader");	/* no clear: keep the probe on screen */
-	else {
-		con_clear(RED);
-		con_str("SHIM", "sweet milestone 4: xnu loader");
-	}
+	/* no clear: keep the probe on screen */
+	con_str("SHIM", "sweet milestone 4: xnu loader");
+#else
+	stage = "loader";
+	con_clear(RED);
+	con_str("SHIM", "sweet milestone 4: xnu loader");
+#endif
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);

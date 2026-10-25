@@ -1104,3 +1104,67 @@ FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
   reads firmare events from IC XRAM via RD_FAST with a fixed report
   address. CONFIRM by reading the stock MIUI driver source (or probing
   XRAM reads from the shim) BEFORE writing the report path.
+
+## >>> 2026-10-25 tarde-2: ROOT CAUSE del hang "Doing boot task" resuelto; parches reconstruidos (0097/0098/0099); nvt6 llego a iOS <<<
+
+### Lo que fallo hoy y por que (hecho verificado, no conjetura)
+1. **El ADT era el layout viejo de 1.2 GiB**. Usamos `sweet-payload.adt`
+   extraido de boot-ci-nvt: dram-base 0xb0000000 dram-size 0x4d000000.
+   El boot sano de ayer (nvt5) Had ADT: dram-base/size 0xc0000000/0xc0000000
+   (3 GiB). Evidencia: `vm_page_bootstrap` free pages 255434 (ayer, ~3.9 GiB)
+   vs 76144 (hoy, ~1.16 GiB). iOS quedaba clavado en launchd
+   `init_featureflags Doing boot task` (~52 s kernel) - DOS boots de hoy
+   idéntico. **Regla: payload = kernel + ADT de nvt5 + cmdline de nvt5.**
+2. **Los parches de kernel 0097(+0098) que hice a mano estaban rotos y CI los
+   saltó silenciosamente**: blacktop build.sh hace `git apply --check` y si
+   falla SOLO imprime "Skipping patch" y sigue (NOTES de verboso no). El commit
+   ce446b6 habia dejado 0097 corrupto en el EOF (mi edicion manual del guard
+   corto el hunk => "corrupt patch at line 387"), y el 0098 asumia el
+   rc-block del 0097 como contexto => no aplicaba. Resultado: kernel dd2200
+   = kernel sin rpmh y con probe NVT viejo (el ring muestra
+   "NVT probe, software reset only", "NVT reset 0 id ff", "NVT poll N id ff",
+   NADA de scan/locked). 101dcbc-tambien-se-construyo-sin-0097 (su patch 0097
+   era KO en ese commit? No: 101dcbc tenia 0097 VALIDO de 381 lineas que
+   aplica limpio, pero igual el kernel construido con el, al bootear, no
+   imprimio nada de rpmh/l18 => confirmar: seguramente ese build SCONTENTO 47...
+   (nota: el print 'l18 enable rc=' vivia en probe viejo; 0 hits en ring de
+   ayer => 0097 NO aplico en ningun kernel CI de hoy/ayer).
+3. **Reparacion (repo reset a 54595af)**:
+   - xnu/patches/0097-sweet-rpmh-l18.patch := version VALIDA de 101dcbc
+     (381 lineas, EOF integro).
+   - xnu/patches/0098-sweet-touch-rpmh-guard.patch (NUEVO): guarda el
+     guard del guard del 0097 en el estado base del tree de CI (guard old ->
+     acepta ldoa18@1800 + ldoc11). Difer genera igual al de td? comment.
+   - xnu/patches/0099-sweet-touch-nvt-scan.patch (NUEVO): probe v10
+     reemplaza probe fijo por touch_nvt_scan() (ordenes 0..3,
+     lock 75 66 03) y quita pins/diag del camino sweetnvt=1.
+   - Cadena validada LOCALMENTE contra el archivo base EXACTO del CI
+     (buildtree artifact del run 40184709864, xnu/bsd/dev/sweet_touch.c
+     1749 lineas): git apply --check 0097 -> 0098 -> 0099: OK x3.
+   - Commit 54595af (patch files only, verified chain).
+4. **Del mismo run: el workflow skip-if-apply-fails significa que un patch
+   roto NO rompe el CI**: siempre hay que ver el ring/prints tras boot, o
+   bajar el artifact xnu-buildtree y hacer grep del source para verificar.
+
+### Boot nvt6 (kernel dd2200 + ADT nvt5 + cmdline nvt5): LLEGO A iOS
+- SpringBoard ok - ADT correcta. El touch no es atendido (falta report path:
+  0098-99 la de scan + poll lock the IC, no reporta eventos). User test OK.
+- Image: shim/out/shim-boot-nvt6.img sha 1d41a494 (WSL build).
+  Payload: shim/out/payload-nvt6.bin.
+
+### Proximo jalón
+1. Push 54595af -> CI (7 min) -> gh run download xnu-buildtree: verificar
+   que sweet_touch.c del buildtree contenga touch_nvt_probe_once y
+   'NVT locked order' ANTES de gastar una boot.
+2. mkpayload: kernel nuevo + shim/out/sweet-nvt5.adt + cmdline de nvt5
+   (guardo script buildnvt6.sh base) -> boot nvt7 -> ring: espera
+   'NVT probe: l18 rc=0', 'SWEET RPMH: rails', 'NVT scan order 0..3',
+   'NVT locked order 1' (orden B = pins 54/53/55/56), 'poll 0 id 00 00 01 75 66 03',
+   'poll' siguiendo el IC mejor ya dentro de iOS vivo.
+3. Despues: parche 0100 report path (poll 66 bytes en 0x22D00 ->
+   touch_report() -> SweetHIDTouch), driver vendor en
+   /home/cg/work-ci/miatoll-ref/{nt36xxx.c,nt36xxx_mem_map.h,nt36xxx.h}
+   (sacado del repo para no commitear codigo de un tercero).
+4. IMPORTANTE: mantener el guard del 0098 manual de proceso: SIEMPRE
+   validar patches con git apply --check ≈ base exacto ANTES de push +
+   verificar el buildtree después.
