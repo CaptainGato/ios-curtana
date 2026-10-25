@@ -1,0 +1,35 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index a9b9932..865213e 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -7359,6 +7359,7 @@ touch_nvt_poll_loop(void)
+ 		unsigned dur = 0, nc = 0;
+ 		unsigned rp = 0;
+ 		unsigned lx[5] = {0}, ly[5] = {0}, ln = 0, lp = 0;
++		unsigned xmn = 99999u, xmx = 0, ymn = 99999u, ymx = 0;
+ 		int xf = 0;
+ 		(void)PE_parse_boot_argn("sweettouchxf", &xf, sizeof(xf));
+ 		printf("SWEET TOUCH: NVT xf=%d\n", xf);
+@@ -7395,7 +7396,11 @@ touch_nvt_poll_loop(void)
+ 					}
+ 				continue;
+ 			}
+-			if (!(st.active & (1u << id))) {
++			if (px < xmn) { xmn = px; }
++				if (px > xmx) { xmx = px; }
++				if (py < ymn) { ymn = py; }
++				if (py > ymx) { ymx = py; }
++				if (!(st.active & (1u << id))) {
+ 					lx[ln % 5u] = px;
+ 					ly[ln % 5u] = py;
+ 					++ln;
+@@ -7437,6 +7442,9 @@ touch_nvt_poll_loop(void)
+ 			}
+ 			dur = 0;
+ 		}
++		if (ln && (lp % 250u) == 249u) {
++			printf("SWEET TOUCH: NVT range x=%u..%u y=%u..%u\n", xmn, xmx, ymn, ymx);
++		}
+ 		if (ln && (++lp % 250u) == 0) {
+ 			unsigned c = ln < 5u ? ln : 5u;
+ 			printf("SWEET TOUCH: NVT last %u presses (raw x,y):", ln);
