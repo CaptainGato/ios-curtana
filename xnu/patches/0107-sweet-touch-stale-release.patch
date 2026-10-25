@@ -1,0 +1,35 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 4ed21b7..bab84a2 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -7353,6 +7353,9 @@ touch_nvt_poll_loop(void)
+ {
+ 	uint8_t rep[68] = {0};
+ 	unsigned reports = 0, dumps = 0;
++		uint8_t prev[68] = {0};
++		unsigned same = 0, stale = 15;
++		(void)PE_parse_boot_argn("sweettouchstale", &stale, sizeof(stale));
+ 		unsigned dur = 0, nc = 0;
+ 		unsigned rp = 0;
+ 		int xf = 0;
+@@ -7406,6 +7409,20 @@ touch_nvt_poll_loop(void)
+ 			    rep[6], rep[7], rep[8], rep[9], rep[10], rep[11], rep[12]);
+ 			++dumps;
+ 		}
++		if (memcmp(rep, prev, 66) == 0) {
++			if (same < 100000u) {
++				++same;
++			}
++		} else {
++			same = 0;
++			memcpy(prev, rep, 66);
++		}
++		if (mask && same >= stale) {
++			if (same == stale) {
++				printf("SWEET TOUCH: NVT stale release after %u identical reads\n", same);
++			}
++			mask = 0;
++		}
+ 		if (mask) {
+ 			++dur;
+ 		} else if (dur) {
