@@ -993,3 +993,114 @@ FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
   "tcm probe 0x20 err=" / "tcm mode=... part=..." / "selected Synaptics
   TCM". No network gadget = nothing to see; pull the ring via OrangeFox
   + tools/sweet-log-pull.sh and grep "SWEET TOUCH: tcm".
+
+---
+
+## >>> 2026-10-25 2026-10-25 08:54 UTC: shim touch probe post-mortem: TLMM tiles + ldoa18 guard <<<
+
+### Facts measured live (curtana)
+- **TLMM tiles** (matches xnu 0089-sweet-touch-tlmm-tiles): atoll TLMM is NOT a
+  linear base. gpio 8(rst)/9(irq) live at **NORTH 0x03900000**, gpio 53..56
+  (QUP1 SE11 SPI pads) at **WEST 0x03500000**, both as base + gpio*0x1000.
+  Reads at the bare DT base 0x03400000+gpio*0x1000 **hang the shim** (v2 probe
+  froze on red screen; no panic -> SError/hang, not handled exception).
+- Shim probe v4 (tiles, compact screen) results:
+  - `rst=01 irq=00`, `cfg8=000002C0 cfg9=00000001` - IDENTICAL to the
+    kernel's own NVT diag (0095) readings -> tile mapping verified.
+  - Idle pad levels 53=1 54=0 55=1 56=0 with cfg=01.
+  - Reset pulse -> IRQ already LOW instantly (low_ms=0, lvl=0).
+  - All 4 pin orders: `id=0000 a3=FF 9f=FF`, no FTS app response. From the
+    MISO byte pattern orders w/ miso=54 or 55 saw idle-high lines (0xFF),
+    miso=53/56 saw 0x00 - no live chip on any mapping.
+- **Root cause candidate for the chip not answering: no rail.** Nobody has
+  enabled touch_vddio (pm6150 ldoa18). AND the kernel-side RPMh client has a
+  bug: `sweet_rpmh_vreg_enable` guards against a stale list
+  (`expected ldoc11 and 2950..3400 mV`), so the `ldoa18@1800` call from the
+  NVT path returned **EINVAL (rc=22) before the RPMh engine was ever touched**
+  (ring has zero "SWEET RPMH: rsc=..." prints). This is a trivial guard bug,
+  also causing 0097 to look broken when it was never actually exercised.
+- Guard fixed in 0097-sweet-rpmh-l18.patch (accepts ldoa18@1800 now). Needs
+  a CI push to take effect for the kernel.
+
+### Shim probe v5 (current artifact)
+- `shim/out/shim-boot-probe.img` SHA256 03c9b284... (built 2026-10-25 08:54 UTC in WSL):
+  probe v5 = v4 + conservative shim port of the 0097 RPMh VRM client
+  (same preservation semantics: only idle DRV2 ACTIVE TCS, no inherited
+  msg overwrite, poison-on-timeout) powering ldoa18=1.8V before re-sampling
+  the pads and re-running the 4 pin orders. Screen shows RHid/RHcf/RHdb/
+  RHmg/RHlk/RHse/RHtc lines + pads pre/post + 4 orders + FOUND.
+- Boot it with `fastboot boot shim\out\shim-boot-probe.img`; results stay
+  on screen 90 s, then warm reset. Transcribe/photo the screen.
+
+### Decision tree after v5 photo
+- If RHse rc!=0 -> fix client port or use kernel build instead.
+- If RHse rc==0 and pads change / a3=87 9f=56 in some order -> we have pin
+  order + live chip; next kernel patch: enable ldoa18 in the FTS path
+  (0097 hook), keep tiles, then run sweetspi=1 and watch the ring.
+- If rc==0 and still FF everywhere -> rails are not the whole story:
+  try lab/ibb (lcdb_ldo/lcdb_ncp) or check the FTS handshake protocol.
+
+### Housekeeping notes
+- Windows tree and WSL tree (~/ios-curtana-new) both updated for shim.c /
+  touchprobe.c; patch edit live only in WSL xnu/patches/0097 (push needed).
+- CI kernels exist for 47fce16/101dcbc but artifacts are private: the user
+  must download the "xnu-kernel" artifact from the Actions web page, or push
+  the 0097 guard fix so the next build bakes it in.
+- repack loop for cmdline variants: tools/repack_bootv2.py
+  (shim-boot.img + payload with sweetspi=N) works; verified byte-identical
+  section copies.
+
+
+## >>> 2026-10-25 afternoon: TOUCH IC IDENTIFIED - Novatek NT36675, pin order B, patch 0098 ready <<<
+
+### Facts measured live (shim probe v8/v9/v10, user photos)
+- **Touch IC answers**: order B (MOSI=54, MISO=53, CLK=55, CS=56) with
+  VDDIO=1.8 V (ldoa18 via shim RPMh). Raw ID `FF FF | 00 00 01 75 (66 03)`
+  - data starts at rx[2]; 6-byte id = `00 00 01 75 66 03` -> satisfies the
+  kernel check (`id[3]=0x75 id[4]=0x66 id[5]=0x03` = **NT36675**). All 3
+  frame alignments (nv1/nv2/nv3) identical.
+- The IC is NOT FocalTech: all FTS orders (A-D) stay FF.
+- cmd-db scanned live: NO `lab`, `ibb`, no `lcdb*` (both lookups ENODEV
+  rc=13). The touch runs on ldoa18 alone (addr 0x41200 | ldoa18=0x1200).
+- Kernel NVT CI (101dcbc) failed because it only probed order 0
+  (MOSI/MISO swapped): `NVT poll 0-59 id ff`, `lv rst=1 irq=0 miso=1`.
+  The real order (B) has never been tried in the kernel.
+- Shim probe v10 artifact: `shim/out/shim-boot-probe.img` SHA256 2bebc33d...
+  (built 2026-10-25 11:05 UTC in WSL).
+
+### Kernel (patches in /home/cg/ios-curtana-new/xnu/patches/)
+- 0097-sweet-rpmh-l18.patch: guard FIXED in WSL (accepts ldoa18@1800; the
+  CI 101dcbc kernel still has the old guard -> kernel l18 rc=22, but the
+  shim turns it on and the kernel inherits it in the same session).
+- 0098-sweet-touch-nvt-scan.patch (NEW, generated from byte-exact context
+  of 0094/95/96/97 and validated with `git apply --check` on a synthetic
+  file, 0 mismatches): replaces the fixed `touch_nvt_probe()` with
+  `touch_nvt_scan()`: sweeps orders 0..3 with `touch_nvt_pins(o)` +
+  swrst x3 + ID page + read; on `75 66 03` match prints
+  `NVT locked order X` then keeps the 3-min validation poll
+  (60 x 3 s). In touch_thread the `sweetnvt=1` path no longer pins the
+  order: `touch_nvt_probe()` scans internally (removed
+  `touch_nvt_pins(order)` / `diag after` from the if nvt_mode block).
+- probe_once replicates the sequence that worked in shim probe v9/v10:
+  swrst 0x3f0fe<-0x69 x3 (5 ms), RD_FAST 0x3f310<-0x00, page 0x1f64e,
+  250 ms, read 0x4e x6 (data at rx[2]).
+
+### Chat/CI state
+- gh in WSL **authenticated as CaptainGato** (valid token) -> push possible.
+- Repo: origin = CaptainGato/ios-curtana; xnu.yml triggers on push to main
+  and workflow_dispatch (macos_version 13.5, config DEVELOPMENT...).
+
+### Next milestone (once the new kernel artifact lands)
+1. push 0097+0098 -> CI -> download xnu-kernel artifact (user browser).
+2. mkpayload (sweetspi=1 sweetnvt=1) + repack_bootv2 -> `fastboot boot`.
+3. Read SWEETLOG ring (sda18, decode ring manually - header stale):
+   expect `NVT scan order X`, `NVT locked order B`, `id ... = NT36675`.
+4. Then: NVT REPORT path in sweet_touch.c (XRAM report buffer ->
+   touch_report() -> SweetHIDTouch -> existing backboardd thread).
+
+### Best guess (unconfirmed) on the NVT report buffer
+- The DT does not expose a report buffer address (novatek props only have
+  swrst/rdfast). The Xiaomi GPL NVT driver (nt36xxx.c for curtana/miatoll)
+  reads firmare events from IC XRAM via RD_FAST with a fixed report
+  address. CONFIRM by reading the stock MIUI driver source (or probing
+  XRAM reads from the shim) BEFORE writing the report path.
