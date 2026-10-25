@@ -1,0 +1,27 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 55e6203..4ed21b7 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -7353,6 +7353,7 @@ touch_nvt_poll_loop(void)
+ {
+ 	uint8_t rep[68] = {0};
+ 	unsigned reports = 0, dumps = 0;
++		unsigned dur = 0, nc = 0;
+ 		unsigned rp = 0;
+ 		int xf = 0;
+ 		(void)PE_parse_boot_argn("sweettouchxf", &xf, sizeof(xf));
+@@ -7405,6 +7406,14 @@ touch_nvt_poll_loop(void)
+ 			    rep[6], rep[7], rep[8], rep[9], rep[10], rep[11], rep[12]);
+ 			++dumps;
+ 		}
++		if (mask) {
++			++dur;
++		} else if (dur) {
++			if (nc++ < 40u) {
++				printf("SWEET TOUCH: NVT contact %u reads\n", dur);
++			}
++			dur = 0;
++		}
+ 		touch_report(mask, x, y);
+ 		touch_wait(10);
+ 	}
