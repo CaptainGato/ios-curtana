@@ -1,0 +1,38 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 37c9997..18a3959 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -400,6 +400,8 @@ touch_checksum(const uint8_t *buf, unsigned len)
+ static void
+ touch_report(uint32_t mask, const int *x, const int *y)
+ {
++	static unsigned age[TOUCH_MAX];
++	static unsigned held;
+ 	for (unsigned id = 0; id < TOUCH_MAX; ++id) {
+ 		uint32_t bit = 1u << id;
+ 		if (mask & bit) {
+@@ -408,8 +410,23 @@ touch_report(uint32_t mask, const int *x, const int *y)
+ 			}
+ 			st.x[id] = x[id];
+ 			st.y[id] = y[id];
++			if (age[id] < 1000u) {
++				++age[id];
++			}
+ 		} else if (st.active & bit) {
+-			sweet_hid_touch((int)id, 0, st.x[id], st.y[id]);
++			if (age[id] < 6u) {
++				/* short tap: keep the contact ~60 ms so UIKit sees began before ended */
++				mask |= bit;
++				++age[id];
++				if (held++ < 10u) {
++					printf("SWEET TOUCH: tap hold id %u age %u\n", id, age[id]);
++				}
++			} else {
++				sweet_hid_touch((int)id, 0, st.x[id], st.y[id]);
++				age[id] = 0;
++			}
++		} else {
++			age[id] = 0;
+ 		}
+ 	}
+ 	st.active = mask;
