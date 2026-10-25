@@ -1,0 +1,99 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index e76fe22..e953c66 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -35,6 +35,7 @@ void sweet_touch_init(void);
+ #define TOUCH_FTS        2
+ #define TOUCH_TCM        3
+ #define TOUCH_FTS_SPI    4
++#define TOUCH_NVT_SPI    5
+ 
+ /* curtana/miatoll: touch is FocalTech FTS over SPI on QUP1 SE5 (0xa94000),
+  * TLMM group qupv3_se11 (gpio 53..56, function qup15). The GENI engine is
+@@ -793,6 +794,7 @@ touch_spi_pins(unsigned order)
+ #define NVT_SWRST_N8 0x3f0feu /* DT novatek,swrst-n8-addr */
+ #define NVT_RD_FAST  0x3f310u /* DT novatek,spi-rd-fast-addr */
+ #define NVT_ID_PAGE  0x1f64eu
++#define NVT_EVENT_BUF  0x22d00u
+ #define NVT_ID_REG   0x4eu
+ 
+ /* vendor CTP_SPI_WRITE: [reg|0x80][data...] */
+@@ -924,6 +926,21 @@ touch_nvt_scan(void)
+ 	return 4;
+ }
+ 
++/* The IC publishes its touch state in its own SRAM.  Point the XRAM window
++ * at EVENT_BUF_ADDR (0x22d00) and read 66 bytes; finger slot i starts at
++ * 1+6*i: byte0 = id<<3|status (1=press 2=move), then x12 y12 weight — the
++ * same layout the vendor nt36xxx.c parser uses. */
++static void
++touch_nvt_read_evt(uint8_t *out)
++{
++	uint8_t tx[72] = {0};
++	uint8_t rx[72] = {0};
++
++	tx[0] = 0x00;   /* windowed register after touch_nvt_page(NVT_EVENT_BUF) */
++	spi_frame(tx, rx, 68u);
++	memcpy(out, rx + 2, 66u);
++}
++
+ static void
+ touch_nvt_probe(void)
+ {
+@@ -933,15 +950,52 @@ touch_nvt_probe(void)
+ 	touch_wait(100);
+ 	unsigned locked = touch_nvt_scan();
+ 	if (locked < 4u) {
++		uint8_t rep[68] = {0};
++		unsigned reports = 0, dumps = 0;
++
+ 		touch_nvt_pins(locked);
+-		/* keep the 3-min validation poll until the report path lands */
+-		for (unsigned n = 0; n < 60; ++n) {
+-			touch_wait(3000);
+-			touch_nvt_print_id("poll", n);
++		st.kind = TOUCH_NVT_SPI;
++		printf("SWEET TOUCH: selected Novatek NT36675 over SPI (event poll), 1080x2340\n");
++		while (!st.dead) {
++			uint32_t mask = 0;
++			int x[TOUCH_MAX] = {0}, y[TOUCH_MAX] = {0};
++
++			touch_nvt_page(NVT_EVENT_BUF);
++			touch_nvt_read_evt(rep);
++			++reports;
++			for (unsigned i = 0; i < TOUCH_MAX; ++i) {
++				const uint8_t *p = rep + 1u + 6u * i;
++				unsigned id = p[0] >> 3;
++				unsigned stat = p[0] & 0x07u;
++				unsigned px = ((unsigned)p[1] << 4) + (unsigned)(p[3] >> 4);
++				unsigned py = ((unsigned)p[2] << 4) + (unsigned)(p[3] & 0x0fu);
++
++				if (id == 0u || id >= TOUCH_MAX || (stat != 1u && stat != 2u)) {
++					continue;
++				}
++				/* curtana panel is 1080x2340; reject obvious garbage frames */
++				if (px > 1079u || py > 2339u) {
++					continue;
++				}
++				mask |= 1u << id;
++				x[id] = (int)px;
++				y[id] = (int)py;
++			}
++			/* limited validation dump: full first reads that carry touches */
++			if (dumps < 30u && (mask || reports > 40u)) {
++				printf("SWEET TOUCH: NVT rep %u %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
++				    reports, rep[0], rep[1], rep[2], rep[3], rep[4], rep[5],
++				    rep[6], rep[7], rep[8], rep[9], rep[10], rep[11], rep[12], rep[13]);
++				++dumps;
++			}
++			touch_report(mask, x, y);
++			touch_wait(10);
+ 		}
++		touch_report(0u, st.x, st.y);
+ 	}
+ }
+ 
++
+ /* Reset, then read the application chip ids. EIO if the IC never answers. */
+ static int
+ touch_fts_spi_start(void)
