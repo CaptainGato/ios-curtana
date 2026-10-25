@@ -1217,3 +1217,32 @@ FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
   reemplazar el poll de ID por poll de eventos con dump hex de los
   primeros N reportes -> validar con el usuario tocando la pantalla y
   leyendo el ring -> luego conectar el pipeline SweetHIDTouch y format.
+
+## >>> 2026-10-25 tarde-4: parche 0100 listo (report path); CI 40192495285 en marcha <<<
+
+### Que hace el 0100 (xnu/patches/0100-sweet-touch-nvt-report.patch, commit 94c3adc)
+- En touch_nvt_probe (camino locked): reemplaza el poll de ID (60x3s) por el
+  poll REAL de reportes:
+  * helper touch_nvt_read_evt(): page NVT_EVENT_BUF (0x22d00) ya seteada por
+    touch_nvt_page, then reg 0x00 x 66 bytes (data rx[2]).
+  * bucle while(!st.dead) a 100 Hz (touch_wait(10)): parse de slots
+    (id<<3|stat; stat 1/2 = down/move; x12 y12; bounds 1080x2340) ->
+    touch_report(mask, x, y) -> sweet_hid_touch (el MISMO pipeline de FTS).
+  * dump limitado a 30 reports con datos ('NVT rep N ...) para validar
+    coordenadas por el ring sin inundar.
+  * al morir: touch_report(0, st.x, st.y) release-all.
+- Define TOUCH_NVT_SPI 5 y NVT_EVENT_BUF.
+- Generado por mk0100.py contra el buildtree exacto de CI (post-0099);
+  cadena 0097-0098-0099-0100 git apply --check OK, balance 0.
+
+### Validacion tras CI (script buildnvt8.sh <run>)
+1. grep buildtree: touch_nvt_read_evt / NVT_EVENT_BUF / event poll (x1 cada uno).
+2. mkpayload kernel + sweet-nvt5.adt + cmdline nvt5 -> boot nvt8.
+3. iOS SpringBoard -> usuario TOCA la pantalla -> OrangeFox -> ring:
+   esperar 'SWEET TOUCH: selected Novatek NT36675 over SPI (event poll)' y
+   drops 'NVT rep N ...' AL TOCAR. Con esos dumps: confirmar formato de
+   finger (id<<3|status, x/y 12-bit) y mapeo raw (y quizaj a invertir ejes).
+4. Si el ring muestra reports con coordenadas coherentes al toque =>
+   el touch FUNCIONA end-to-end (SpringBoard recibue eventos via
+   SweetHIDTouch). blindarse de una ronda mas solo si el mapeo ejes/ID
+   requiere calibracion.
