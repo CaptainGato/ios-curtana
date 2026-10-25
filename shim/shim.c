@@ -158,7 +158,7 @@ void exc_handler(uint64_t slot, uint64_t *regs)
 	con_hex("X0", regs[0]);
 	con_hex("X1", regs[1]);
 	con_hex("X30", regs[29]);	/* stashed lr is just above the frame */
-	reset(150);
+	reset(40);
 }
 
 /* ---- SMP ---- */
@@ -379,37 +379,20 @@ void shim_main(uint64_t dtb)
 	struct mmu_info mi;
 
 #if defined(TOUCH_PROBE) && TOUCH_PROBE
-	/* Diagnostic build: probe the touch bus (this also votes the L18 rail
-	 * through RPMh), then fall through and boot the xnu payload in the
-	 * ramdisk in the SAME session: the kernel inherits the live rail and
-	 * the full log goes to the SWEETLOG ring instead of this screen.
-	 * No reset here: reset() would drop the vote and the session. */
+	/* Diagnostic build: probe the touch bus, show results, then reboot. */
 	touch_probe();
-	delay_ms(5000);
+	delay_ms(45000);
+	reset(5);
 #endif
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
-#if defined(TOUCH_PROBE) && TOUCH_PROBE
-	stage = "loader";
-	/* no clear: keep the probe on screen */
-	con_str("SHIM", "sweet milestone 4: xnu loader");
-#else
 	stage = "loader";
 	con_clear(RED);
 	con_str("SHIM", "sweet milestone 4: xnu loader");
-#endif
 	con_skip();
 	const char *why = loader_boot(dtb);
 	con_str("LOADER", why);
 	con_skip();
-#if defined(TOUCH_PROBE) && TOUCH_PROBE
-	if (why) {
-		/* Probe build, no payload: keep the touch results visible. */
-		con_str("HOLD", "probe results stay 3 min");
-		delay_ms(180000);
-		reset(20);
-	}
-#endif
 
 	/* No payload: probe the internal UFS while the MMU is still off. */
 	stage = "ufs";
@@ -459,5 +442,5 @@ void shim_main(uint64_t dtb)
 	test_gic();
 
 	stage = "done";
-	reset(150);
+	reset(40);
 }

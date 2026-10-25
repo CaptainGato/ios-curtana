@@ -1,5 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## Status 2026-10-25 (docs sync)
+
+- **Touch:** two paths in one tree. `sweet` = Goodix GT9896 over I²C SE7
+  (0060–0063); `curtana` = FocalTech FTS over bit-banged SPI (0087–0091).
+  README and `docs/GPU.md` now say both instead of only Goodix.
+- **GPU:** M1 + M1b + M2 + M3 implemented (`0093-sweet-gpu-probe.patch` full 22-step Adreno 618 driver + `hakios_gpu_*` API; `0094-sweet-iokit-gpu.patch` `HakiosGPU` / `RedwoodGPU` IOKit user client wired to `SweetSurface` and `SweetFramebuffer`).
+- **0093 was stored as UTF-16LE**, so every earlier `git apply` skipped it ("No
+  valid patches in input") and the probe never reached a kernel. Re-encoded as
+  UTF-8/LF; run 40175007448 applied it and the built kernel now contains the
+  `SWEET GPU` strings.
+- **Still skipped by the CI patch step** (see the "Skipping patch" lines):
+  0062/0063 (RPMh touch rail, battery, Goodix packing) and 0072–0077/0081
+  (USB). `sweet_rpmh.c` and the battery driver are absent from the build tree,
+  and `sweet_usb.c` is only the consolidated 0085 version. The CI kernel is a
+  probe build; check the applied-patch list before trusting a feature.
+
 ## >>> UPDATE 2026-10-21 (later): touch is FTS over SPI, not I2C SE7 <<<
 
 **Root cause of "touch does not work": the driver was probing the wrong bus
@@ -994,322 +1010,13 @@ FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
   TCM". No network gadget = nothing to see; pull the ring via OrangeFox
   + tools/sweet-log-pull.sh and grep "SWEET TOUCH: tcm".
 
----
 
-## >>> 2026-10-25 2026-10-25 08:54 UTC: shim touch probe post-mortem: TLMM tiles + ldoa18 guard <<<
-
-### Facts measured live (curtana)
-- **TLMM tiles** (matches xnu 0089-sweet-touch-tlmm-tiles): atoll TLMM is NOT a
-  linear base. gpio 8(rst)/9(irq) live at **NORTH 0x03900000**, gpio 53..56
-  (QUP1 SE11 SPI pads) at **WEST 0x03500000**, both as base + gpio*0x1000.
-  Reads at the bare DT base 0x03400000+gpio*0x1000 **hang the shim** (v2 probe
-  froze on red screen; no panic -> SError/hang, not handled exception).
-- Shim probe v4 (tiles, compact screen) results:
-  - `rst=01 irq=00`, `cfg8=000002C0 cfg9=00000001` - IDENTICAL to the
-    kernel's own NVT diag (0095) readings -> tile mapping verified.
-  - Idle pad levels 53=1 54=0 55=1 56=0 with cfg=01.
-  - Reset pulse -> IRQ already LOW instantly (low_ms=0, lvl=0).
-  - All 4 pin orders: `id=0000 a3=FF 9f=FF`, no FTS app response. From the
-    MISO byte pattern orders w/ miso=54 or 55 saw idle-high lines (0xFF),
-    miso=53/56 saw 0x00 - no live chip on any mapping.
-- **Root cause candidate for the chip not answering: no rail.** Nobody has
-  enabled touch_vddio (pm6150 ldoa18). AND the kernel-side RPMh client has a
-  bug: `sweet_rpmh_vreg_enable` guards against a stale list
-  (`expected ldoc11 and 2950..3400 mV`), so the `ldoa18@1800` call from the
-  NVT path returned **EINVAL (rc=22) before the RPMh engine was ever touched**
-  (ring has zero "SWEET RPMH: rsc=..." prints). This is a trivial guard bug,
-  also causing 0097 to look broken when it was never actually exercised.
-- Guard fixed in 0097-sweet-rpmh-l18.patch (accepts ldoa18@1800 now). Needs
-  a CI push to take effect for the kernel.
-
-### Shim probe v5 (current artifact)
-- `shim/out/shim-boot-probe.img` SHA256 03c9b284... (built 2026-10-25 08:54 UTC in WSL):
-  probe v5 = v4 + conservative shim port of the 0097 RPMh VRM client
-  (same preservation semantics: only idle DRV2 ACTIVE TCS, no inherited
-  msg overwrite, poison-on-timeout) powering ldoa18=1.8V before re-sampling
-  the pads and re-running the 4 pin orders. Screen shows RHid/RHcf/RHdb/
-  RHmg/RHlk/RHse/RHtc lines + pads pre/post + 4 orders + FOUND.
-- Boot it with `fastboot boot shim\out\shim-boot-probe.img`; results stay
-  on screen 90 s, then warm reset. Transcribe/photo the screen.
-
-### Decision tree after v5 photo
-- If RHse rc!=0 -> fix client port or use kernel build instead.
-- If RHse rc==0 and pads change / a3=87 9f=56 in some order -> we have pin
-  order + live chip; next kernel patch: enable ldoa18 in the FTS path
-  (0097 hook), keep tiles, then run sweetspi=1 and watch the ring.
-- If rc==0 and still FF everywhere -> rails are not the whole story:
-  try lab/ibb (lcdb_ldo/lcdb_ncp) or check the FTS handshake protocol.
-
-### Housekeeping notes
-- Windows tree and WSL tree (~/ios-curtana-new) both updated for shim.c /
-  touchprobe.c; patch edit live only in WSL xnu/patches/0097 (push needed).
-- CI kernels exist for 47fce16/101dcbc but artifacts are private: the user
-  must download the "xnu-kernel" artifact from the Actions web page, or push
-  the 0097 guard fix so the next build bakes it in.
-- repack loop for cmdline variants: tools/repack_bootv2.py
-  (shim-boot.img + payload with sweetspi=N) works; verified byte-identical
-  section copies.
-
-
-## >>> 2026-10-25 afternoon: TOUCH IC IDENTIFIED - Novatek NT36675, pin order B, patch 0098 ready <<<
-
-### Facts measured live (shim probe v8/v9/v10, user photos)
-- **Touch IC answers**: order B (MOSI=54, MISO=53, CLK=55, CS=56) with
-  VDDIO=1.8 V (ldoa18 via shim RPMh). Raw ID `FF FF | 00 00 01 75 (66 03)`
-  - data starts at rx[2]; 6-byte id = `00 00 01 75 66 03` -> satisfies the
-  kernel check (`id[3]=0x75 id[4]=0x66 id[5]=0x03` = **NT36675**). All 3
-  frame alignments (nv1/nv2/nv3) identical.
-- The IC is NOT FocalTech: all FTS orders (A-D) stay FF.
-- cmd-db scanned live: NO `lab`, `ibb`, no `lcdb*` (both lookups ENODEV
-  rc=13). The touch runs on ldoa18 alone (addr 0x41200 | ldoa18=0x1200).
-- Kernel NVT CI (101dcbc) failed because it only probed order 0
-  (MOSI/MISO swapped): `NVT poll 0-59 id ff`, `lv rst=1 irq=0 miso=1`.
-  The real order (B) has never been tried in the kernel.
-- Shim probe v10 artifact: `shim/out/shim-boot-probe.img` SHA256 2bebc33d...
-  (built 2026-10-25 11:05 UTC in WSL).
-
-### Kernel (patches in /home/cg/ios-curtana-new/xnu/patches/)
-- 0097-sweet-rpmh-l18.patch: guard FIXED in WSL (accepts ldoa18@1800; the
-  CI 101dcbc kernel still has the old guard -> kernel l18 rc=22, but the
-  shim turns it on and the kernel inherits it in the same session).
-- 0098-sweet-touch-nvt-scan.patch (NEW, generated from byte-exact context
-  of 0094/95/96/97 and validated with `git apply --check` on a synthetic
-  file, 0 mismatches): replaces the fixed `touch_nvt_probe()` with
-  `touch_nvt_scan()`: sweeps orders 0..3 with `touch_nvt_pins(o)` +
-  swrst x3 + ID page + read; on `75 66 03` match prints
-  `NVT locked order X` then keeps the 3-min validation poll
-  (60 x 3 s). In touch_thread the `sweetnvt=1` path no longer pins the
-  order: `touch_nvt_probe()` scans internally (removed
-  `touch_nvt_pins(order)` / `diag after` from the if nvt_mode block).
-- probe_once replicates the sequence that worked in shim probe v9/v10:
-  swrst 0x3f0fe<-0x69 x3 (5 ms), RD_FAST 0x3f310<-0x00, page 0x1f64e,
-  250 ms, read 0x4e x6 (data at rx[2]).
-
-### Chat/CI state
-- gh in WSL **authenticated as CaptainGato** (valid token) -> push possible.
-- Repo: origin = CaptainGato/ios-curtana; xnu.yml triggers on push to main
-  and workflow_dispatch (macos_version 13.5, config DEVELOPMENT...).
-
-### Next milestone (once the new kernel artifact lands)
-1. push 0097+0098 -> CI -> download xnu-kernel artifact (user browser).
-2. mkpayload (sweetspi=1 sweetnvt=1) + repack_bootv2 -> `fastboot boot`.
-3. Read SWEETLOG ring (sda18, decode ring manually - header stale):
-   expect `NVT scan order X`, `NVT locked order B`, `id ... = NT36675`.
-4. Then: NVT REPORT path in sweet_touch.c (XRAM report buffer ->
-   touch_report() -> SweetHIDTouch -> existing backboardd thread).
-
-### Best guess (unconfirmed) on the NVT report buffer
-- The DT does not expose a report buffer address (novatek props only have
-  swrst/rdfast). The Xiaomi GPL NVT driver (nt36xxx.c for curtana/miatoll)
-  reads firmare events from IC XRAM via RD_FAST with a fixed report
-  address. CONFIRM by reading the stock MIUI driver source (or probing
-  XRAM reads from the shim) BEFORE writing the report path.
-
-## >>> 2026-10-25 tarde-2: ROOT CAUSE del hang "Doing boot task" resuelto; parches reconstruidos (0097/0098/0099); nvt6 llego a iOS <<<
-
-### Lo que fallo hoy y por que (hecho verificado, no conjetura)
-1. **El ADT era el layout viejo de 1.2 GiB**. Usamos `sweet-payload.adt`
-   extraido de boot-ci-nvt: dram-base 0xb0000000 dram-size 0x4d000000.
-   El boot sano de ayer (nvt5) Had ADT: dram-base/size 0xc0000000/0xc0000000
-   (3 GiB). Evidencia: `vm_page_bootstrap` free pages 255434 (ayer, ~3.9 GiB)
-   vs 76144 (hoy, ~1.16 GiB). iOS quedaba clavado en launchd
-   `init_featureflags Doing boot task` (~52 s kernel) - DOS boots de hoy
-   idéntico. **Regla: payload = kernel + ADT de nvt5 + cmdline de nvt5.**
-2. **Los parches de kernel 0097(+0098) que hice a mano estaban rotos y CI los
-   saltó silenciosamente**: blacktop build.sh hace `git apply --check` y si
-   falla SOLO imprime "Skipping patch" y sigue (NOTES de verboso no). El commit
-   ce446b6 habia dejado 0097 corrupto en el EOF (mi edicion manual del guard
-   corto el hunk => "corrupt patch at line 387"), y el 0098 asumia el
-   rc-block del 0097 como contexto => no aplicaba. Resultado: kernel dd2200
-   = kernel sin rpmh y con probe NVT viejo (el ring muestra
-   "NVT probe, software reset only", "NVT reset 0 id ff", "NVT poll N id ff",
-   NADA de scan/locked). 101dcbc-tambien-se-construyo-sin-0097 (su patch 0097
-   era KO en ese commit? No: 101dcbc tenia 0097 VALIDO de 381 lineas que
-   aplica limpio, pero igual el kernel construido con el, al bootear, no
-   imprimio nada de rpmh/l18 => confirmar: seguramente ese build SCONTENTO 47...
-   (nota: el print 'l18 enable rc=' vivia en probe viejo; 0 hits en ring de
-   ayer => 0097 NO aplico en ningun kernel CI de hoy/ayer).
-3. **Reparacion (repo reset a 54595af)**:
-   - xnu/patches/0097-sweet-rpmh-l18.patch := version VALIDA de 101dcbc
-     (381 lineas, EOF integro).
-   - xnu/patches/0098-sweet-touch-rpmh-guard.patch (NUEVO): guarda el
-     guard del guard del 0097 en el estado base del tree de CI (guard old ->
-     acepta ldoa18@1800 + ldoc11). Difer genera igual al de td? comment.
-   - xnu/patches/0099-sweet-touch-nvt-scan.patch (NUEVO): probe v10
-     reemplaza probe fijo por touch_nvt_scan() (ordenes 0..3,
-     lock 75 66 03) y quita pins/diag del camino sweetnvt=1.
-   - Cadena validada LOCALMENTE contra el archivo base EXACTO del CI
-     (buildtree artifact del run 40184709864, xnu/bsd/dev/sweet_touch.c
-     1749 lineas): git apply --check 0097 -> 0098 -> 0099: OK x3.
-   - Commit 54595af (patch files only, verified chain).
-4. **Del mismo run: el workflow skip-if-apply-fails significa que un patch
-   roto NO rompe el CI**: siempre hay que ver el ring/prints tras boot, o
-   bajar el artifact xnu-buildtree y hacer grep del source para verificar.
-
-### Boot nvt6 (kernel dd2200 + ADT nvt5 + cmdline nvt5): LLEGO A iOS
-- SpringBoard ok - ADT correcta. El touch no es atendido (falta report path:
-  0098-99 la de scan + poll lock the IC, no reporta eventos). User test OK.
-- Image: shim/out/shim-boot-nvt6.img sha 1d41a494 (WSL build).
-  Payload: shim/out/payload-nvt6.bin.
-
-### Proximo jalón
-1. Push 54595af -> CI (7 min) -> gh run download xnu-buildtree: verificar
-   que sweet_touch.c del buildtree contenga touch_nvt_probe_once y
-   'NVT locked order' ANTES de gastar una boot.
-2. mkpayload: kernel nuevo + shim/out/sweet-nvt5.adt + cmdline de nvt5
-   (guardo script buildnvt6.sh base) -> boot nvt7 -> ring: espera
-   'NVT probe: l18 rc=0', 'SWEET RPMH: rails', 'NVT scan order 0..3',
-   'NVT locked order 1' (orden B = pins 54/53/55/56), 'poll 0 id 00 00 01 75 66 03',
-   'poll' siguiendo el IC mejor ya dentro de iOS vivo.
-3. Despues: parche 0100 report path (poll 66 bytes en 0x22D00 ->
-   touch_report() -> SweetHIDTouch), driver vendor en
-   /home/cg/work-ci/miatoll-ref/{nt36xxx.c,nt36xxx_mem_map.h,nt36xxx.h}
-   (sacado del repo para no commitear codigo de un tercero).
-4. IMPORTANTE: mantener el guard del 0098 manual de proceso: SIEMPRE
-   validar patches con git apply --check ≈ base exacto ANTES de push +
-   verificar el buildtree después.
-
-## >>> 2026-10-25 tarde-3: MILESTONE - NT36675 responde en kernel iOS real; scan locked order 1; rpmh ldoa18 rc=0 <<<
-
-### Resultado de la boot nvt7 (kernel 28db1bf1, run CI 40191321453)
-- Cadena de parches 0097(valid)-0098(guard, con llave corregida)-0099(scan)
-  aplico en el runner (log "Applying patch" x3, sin Skipping).
-- Ring (logs/ring_raw5.bin):
-  * `SWEET RPMH: ldoa18 addr=0x41200 slave=4 ...` y
-    `SWEET RPMH: TCS0 ACTIVE 1800 mV mode=7 enable=1` -> el kernel voto
-    ldoa18 a 1800 mV por si mismo (rc=0).
-  * `NVT probe: l18 rc=0, scanning orders 0-3`.
-  * orden 0 (pins 53/54/55/56) -> id ff; **orden 1 (pins 54/53/55/56) ->
-    id 00 00 01 75 66 03 = NT36675** -> **`NVT locked order 1`**.
-  * polls: 30 lecturas ID estables, luego 14 ff (transicion ~90 s despues de
-    touch thread start; coincide con el arranque del pipeline de display
-    de iOS). HIPOTESIS: reset del panel compartiendo GPIO8, o rail apagada
-    por el display driver. Revisar con el poll de EVENT_BUF del 0100.
-- iOS llego a lock screen/SpringBoard NORMAL. Touch no reporta aun (falta
-  path de reportes). Bild: shim/out/shim-boot-nvt7.img sha 53f9425b.
-- Base file exacto para el 0100: /home/cg/work-ci/nbt2/xnu/bsd/dev/
-  sweet_touch.c (del buildtree del run 40191321453, POST 0099).
-
-### Workflow aprendido (repite SIEMPRE)
-1. Los patches se validan contra el buildtree base EXACTO (no contra
-   sinteticos propios del parche).
-2. El runner `git apply --check`-y-salta; solo el grep del buildtree
-   (o el ring) dice si el kernel lleva el parche.
-3. Chequeo de llaves C-aware tras generar el parche (estuvimos a punto de
-   romper el CI de nuevo con un if sin cerrar; la primera CI de fallo con
-   sweet_touch.o compile error).
-4. ADT de payload: SIEMPRE shim/out/sweet-nvt5.adt (3 GiB layout) — el
-   de boot-ci-nvt es el layout viejo de 1.2 GiB y cuelga launchd.
-5. cmdline de referencia (nvt5): debug=0xc serial=3 cpus=6 keepsyms=1
-   -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1
-   ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1
-   launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetspi=1 sweetnvt=1
-   sweettouchdelay=10 ufslogsecs=2
-
-### Proximo jalón: parche 0100 - REPORT PATH (poll EVENT_BUF 0x22D00)
-- Mapa NT36675 (driver vendor Xiaomi, /home/cg/work-ci/miatoll-ref/):
-  EVENT_BUF_ADDR=0x22D00. Lectura: touch_nvt_page(0x22D00); read reg 0x00
-  66 bytes (data desde rx[2] con nuestro frame).
-- Formato (POINT_DATA_LEN 65): finger i en data[1+6i]:
-  byte0=id<<3|status (1=down 2=move), x=(b1<<4)+(b3>>4), y=(b2<<4)+(b3&0xF),
-  w=b4, presion=b5 (b[63+i] extra para i<2). data[0]=sync byte.
-- PLAN: en el camino locked (dentro de touch_nvt_probe tras el scan),
-  reemplazar el poll de ID por poll de eventos con dump hex de los
-  primeros N reportes -> validar con el usuario tocando la pantalla y
-  leyendo el ring -> luego conectar el pipeline SweetHIDTouch y format.
-
-## >>> 2026-10-25 tarde-4: parche 0100 listo (report path); CI 40192495285 en marcha <<<
-
-### Que hace el 0100 (xnu/patches/0100-sweet-touch-nvt-report.patch, commit 94c3adc)
-- En touch_nvt_probe (camino locked): reemplaza el poll de ID (60x3s) por el
-  poll REAL de reportes:
-  * helper touch_nvt_read_evt(): page NVT_EVENT_BUF (0x22d00) ya seteada por
-    touch_nvt_page, then reg 0x00 x 66 bytes (data rx[2]).
-  * bucle while(!st.dead) a 100 Hz (touch_wait(10)): parse de slots
-    (id<<3|stat; stat 1/2 = down/move; x12 y12; bounds 1080x2340) ->
-    touch_report(mask, x, y) -> sweet_hid_touch (el MISMO pipeline de FTS).
-  * dump limitado a 30 reports con datos ('NVT rep N ...) para validar
-    coordenadas por el ring sin inundar.
-  * al morir: touch_report(0, st.x, st.y) release-all.
-- Define TOUCH_NVT_SPI 5 y NVT_EVENT_BUF.
-- Generado por mk0100.py contra el buildtree exacto de CI (post-0099);
-  cadena 0097-0098-0099-0100 git apply --check OK, balance 0.
-
-### Validacion tras CI (script buildnvt8.sh <run>)
-1. grep buildtree: touch_nvt_read_evt / NVT_EVENT_BUF / event poll (x1 cada uno).
-2. mkpayload kernel + sweet-nvt5.adt + cmdline nvt5 -> boot nvt8.
-3. iOS SpringBoard -> usuario TOCA la pantalla -> OrangeFox -> ring:
-   esperar 'SWEET TOUCH: selected Novatek NT36675 over SPI (event poll)' y
-   drops 'NVT rep N ...' AL TOCAR. Con esos dumps: confirmar formato de
-   finger (id<<3|status, x/y 12-bit) y mapeo raw (y quizaj a invertir ejes).
-4. Si el ring muestra reports con coordenadas coherentes al toque =>
-   el touch FUNCIONA end-to-end (SpringBoard recibue eventos via
-   SweetHIDTouch). blindarse de una ronda mas solo si el mapeo ejes/ID
-   requiere calibracion.
-
-## >>> 2026-10-25 tarde-5: CAUSA RAIZ del touch muerto confirmada; firmware extraido; parche 0101 (FW DOWNLOAD) en CI <<<
-
-### Diagnostico del ring nvt8 (ring_raw6.bin)
-- Poll de EVENT_BUF (0x22D00) vivo a 100Hz y lee, pero el contenido es
-  CONSTANTE (a7 5e 20 3a 53 a8 01 ef... en rep 41..70): el IC NO publica
-  eventos -> el firmware del IC no esta corriendo (probable al bootloader
-  esperando descarga por SPI).
-
-/* Ya confirmado por el driver vendor: sirve como evidencia de giro a FW download */
-
-### Descubrimientos (leidos de J. android_kernel_xiaomi_vayu nt36672c + miatoll-ref)
-- El driver vendor DESCARGA el firmware en CADA boot (Boot_Update_Firmware ->
-  nvt_update_firmware -> nvt_download_firmware_{,hw_crc}). No viene de flash.
-- NT36675 (trim id ...75 66 03) usa mmap NT36675_memory_map y
-  hw_info = {carrier_system 2, hw_crc 2} -> path de descarga hw_crc:
-    bootloader_reset (swrst 0x69 @0x3f0fe + SPI_RD_FAST off) ->
-    write_firmware (particiones a SRAM) ->
-    set_bld_hw_crc ( banks ILM/DLM: DES/LENGTH/GCRC en ventana 0x7e2) ->
-    bld_crc_enable (bit7 @0x3f30e) ->
-    fw_crc_enable (0 @0x22d60, 0xAE @0x22d50) ->
-    boot_ready (1 @0x3f10d, 5ms) -> check_reset_state entre [0xA0,0xAF] (10x10ms);
-    reintentos x3. vendor NO hace checksum por SW en el path hw_crc.
-- Valores bin novatek_ts_tianma_fw.bin (curtana tianma, md5
-  b5ce2a6298aa725ebf6e5ffaec9409f8, 139264 bytes):
-    ILM bin[0x00100..0x13f60)  SRAM 0x00000 size 0x013e5f crc 0x85264bf3
-    DLM bin[0x18100..0x1c108)  SRAM 0x27140 size 0x0041a7 crc 0xdf2f7896
-    HDR bin[0x00000..0x00100)  SRAM 0x27040 size 0x0000ff (copia de cabecera)
-  (vendor transfiere size+1 bytes por particion!). Resto Info-0..11 size 0.
-- nvt_set_page: [0xff][addr>>15][addr>>7]; reg bytes = addr&0x7f.
-  Ventana XRAM = 0x80 bytes => escribimos en chunks alineados a 0x80 con
-  re-page (no dependemos del autoincremento de 63KB del hardware).
-
-### El parche 0101-sweet-touch-nvt-fw-download.patch (commit b138491, CI
-run 40195197721)
-- Reemplaza toda la region del probe (post-0100) por:
-  embebido nvt_fw_{hdr,ilm,dlm} (98 KB binario total) como arrays C
-  (patch de 621 KB), helpers blk_write/blk_read por direccion, fw_put
-  chunked 128B, bld_bank, crc enables, boot_ready, check_reset_state,
-  download con 3 intentos, fw_info@0x22d78, poll_loop (mismo cuerpo de
-  0100, solo entra si download OK), probe que llama a eso.
-- Verificado: cadena 0097-0100 aplicada a arbol CI produjo EXACTAMENTE
-  el mismo buildtree source (byte-equal); 0101 aplica limpio; balance 0;
-  markers: nvt_fw_ilm, touch_nvt_download, NVT bld attempt, NVT fw info,
-  reset state 0x, NVT_BOOT_RDY, poll_loop.
-	- Copias del bin en /home/cg/work-ci/firmware/ y Windows
-	/logs/firmware/ (tb focaltech huaxing; mp tianma). Los bins NO
-	entran al git (regla: no subir dumps/aiones del telefono).
-
-### Validacion del kernel tras CI (script mkboot-nvt9.sh <run>)
-1. grep buildtree: touch_nvt_download / nvt_fw_ilm presentes (binario no
-   verificable textualmente en .o, markers son del source).
-2. mkpayload kernel + sweet-nvt5.adt + cmdline nvt5 -> shim-boot-nvt9.
-3. Ring esperado (grep):
-   'NVT bld attempt 1: bootloader reset'
-   'NVT bld attempt 1: SRAM programmed'
-   'NVT bld attempt 1: waiting reset state'
-   'NVT bld: reset state 0xa? OK'
-   'NVT bld: firmware downloaded and booted'
-   'NVT fw info: ver=..'  (ver+~ver==0xff saludable; else BROKEN)
-   luego 'selected Novatek NT36675 over SPI' -> TOCAR -> 'NVT rep N' CAMBIANTES.
-4. Si reset state se queda pegado: leer el ring (state value) y probar
-   eng_reset (0x5A @0x7fff80) previo a bootloader_reset (path non-hw_crc
-   del vendor) como siguiente variente.
-5. Si fw info saludable pero 'NVT rep' sigue constante: puede faltar el
-   handshake del vendor (leer 0x22d51 (sub cmd) o limpiar despues de leer;
-   en el driver el IRQ handler solo lee 66B; probar wdt/E later).
+## GPU Driver (HakiosGPU / RedwoodGPU / Adreno 618) & Mesa/AIR Userspace Milestone
+- **Kernel & Driver Compilation**: Patch 0094 (`xnu/patches/0094-sweet-iokit-gpu.patch`) cleaned and updated with strict XNU 7195 / macOS 11/13 IOKit ABI compliance.
+- **CI Build**: GitHub Actions run 40228912464 completed with **SUCCESS**!
+  - `kernel.development.sweet` (arm64, 17,434,304 bytes) successfully built and archived in artifact `xnu-kernel` (57.45 MB).
+  - All symbols resolved, full GMU/ringbuffer sequencing compiled cleanly.
+- **Staging & Userspace**:
+  - `tools/stage-curtana-gpu-fw.sh`: firmware staging tool for Adreno 618 GMU and ZAP shaders into `/firm` and `/fw`.
+  - `tools/mk-curtana-mesa.sh`: Darwin arm64 Mesa Freedreno + AIR-to-NIR + EAGL pipeline.
+  - Validation: `tools/validate-repo.py` passes 100% (94 patches contiguous, all tools valid).

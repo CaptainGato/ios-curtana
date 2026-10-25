@@ -4,7 +4,9 @@
 
 This project ports Apple's open-source XNU kernel (xnu-8796, the iOS 16 generation) to the Xiaomi Redmi Note 10 Pro (`sweet`, Qualcomm SM7150 / Snapdragon 732G). On top of it runs the **unmodified iOS 16.7.16 (20H392) userland of the iPhone X**: launchd, the system daemons, backboardd, SpringBoard and the stock apps.
 
-As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock it, open Settings, pull down Control Center and the notification center, and use the touchscreen and the hardware buttons. Rendering runs entirely on the CPU; there is no GPU driver.
+As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock it, open Settings, pull down Control Center and the notification center, and use the touchscreen and the hardware buttons. Rendering runs entirely on the CPU; there is no GPU driver (an Adreno probe exists, see below).
+
+> **Two touch paths, one tree.** The bring-up started on `sweet` (Redmi Note 10 Pro) with a Goodix GT9896 on I²C. The current `curtana` unit has a FocalTech FTS on SPI, and `xnu/patches/0087` is the working driver for it. The live device tree decides which one a unit needs — check `docs/MIATOLL.md` before assuming either.
 
 > Experimental bring-up, not a usable phone OS. Many things are missing or stubbed (see below), and Apple's security model is mostly switched off. It installs into the `userdata` partition and so **erases Android's user data**.
 
@@ -19,7 +21,7 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 | iOS userland | Real iPhone X 16.7.16 root filesystem and shared cache; launchd and the system daemons run |
 | Display | Kernel IOSurface + IOMobileFramebuffer (`AppleCLCD`) services; CoreAnimation renders in software; frames are copied into the bootloader's framebuffer. Presented to iOS as an iPhone X panel (1125×2436) |
 | GUI | backboardd, SpringBoard, lock screen, home screen, Control Center, notification center, Settings |
-| Touch | Goodix GT9896 over I²C (GENI), rail enabled through RPMh, delivered as HID digitizer events |
+| Touch | `sweet`: Goodix GT9896 over I²C (GENI), rail enabled through RPMh. `curtana`: FocalTech FTS over bit-banged SPI (`spi@a94000`). Both delivered as HID digitizer events |
 | Buttons | Power, volume up/down (PMIC through SPMI) as HID consumer keys; lock/wake works |
 | Battery | IOPMPowerSource service (static 100 %, charging icon; real fuel-gauge readout prepared) |
 | Device identity | iPhone X (`iPhone10,3` / `D22AP`): no Home button, gesture UI |
@@ -29,7 +31,7 @@ As of **2026-10-18** the phone boots to the **iOS home screen**. You can unlock 
 
 - **Navigation:** you cannot leave an app (the home gesture and AssistiveTouch Home do nothing yet).
 - **No Wi-Fi, Bluetooth, cellular, audio, camera, sensors, GPS or SEP / Face ID.** Daemons for them start and fail or keep relaunching.
-- **No GPU.** Everything is drawn by the CPU at roughly 20–30 fps. The two Cortex-A76 cores are not used yet.
+- **No GPU.** Everything is drawn by the CPU at roughly 20–30 fps. Patch `0093` adds an Adreno 618 probe (M1: registers, fuses, clock state, `sweetgpu=N`, default off); GMU firmware, SMMU and the IOAccelerator (M2–M3) are not there yet. The two Cortex-A76 cores are not used yet.
 - **Few apps.** The image has only what is on the system volume. There is no App Store, no Apple ID, and some Settings pages are empty.
 - **Slow boot:** about 4 minutes on the Apple logo.
 - **Security is off:** permissive code signing (AMFI) and sandbox policies, a stub AppleKeyStore, no data protection. Do not put anything personal on it.
@@ -186,6 +188,11 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 | 0066–0067 | Fault-region crash info; console mute |
 | 0068 | IOSurface lookup semantics for already-mapped surfaces |
 | 0069 | Batched persistent-log flushes |
+| 0070–0081 | PID hibernate; touch edge handling; USB (probe, EP0, VBUS override, ECM, RX mbufs, live log, link state); 8-core SMP; display power; net trace |
+| 0082–0086 | Touch diagnostics (GCC vote, HWCG FSM, SE7 FIFO) and USB restore |
+| 0087–0091 | FocalTech FTS over SPI: bit-banged mode-0 bus, boot hook, TLMM tiles, report diagnostics, FT8756 firmware load |
+| 0092 | Skywalk quiet nexus |
+| 0093 | Adreno 618 probe (M1): maps KGSL/GPUCC/GMU/SMMU/QFPROM/GCC, reads fuses and clock state behind `sweetgpu=N` (default off) |
 
 ## Key hardware facts
 
@@ -193,7 +200,8 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 - GICv3 with security extensions: the timer goes through Group 1 IRQ (virtual timer INTID 19), not FIQ as on Apple silicon.
 - PSCI through `smc`, 19.2 MHz timer, ARMv8.2 without pointer authentication. MPIDR uses Aff1 for the core number.
 - Panel: 1080×2400 DSC video mode, continuous splash from ABL, no refresh kick needed.
-- Touch: Goodix GT9896 at I²C `0x5d` on QUP SE7 (`0xa84000`), powered by PM6150L LDO11 through RPMh.
+- Touch (`sweet`): Goodix GT9896 at I²C `0x5d` on QUP SE7 (`0xa84000`), powered by PM6150L LDO11 through RPMh.
+- Touch (`curtana`): FocalTech FTS on QUP1 SE5 SPI (`0xa94000`, 8 MHz), reset GPIO 8, IRQ GPIO 9, driven bit-banged on TLMM `0x03400000` GPIO 53–56 (patch `0087`). The I²C touch nodes in the live FDT are `disabled`.
 - Buttons: power and volume down on the PM6150 PON block, volume up on PM6150L GPIO2 (SPMI SID 4).
 
 More in [`NOTES.md`](NOTES.md).

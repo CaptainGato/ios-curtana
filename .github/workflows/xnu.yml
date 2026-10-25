@@ -102,7 +102,7 @@ jobs:
           mkdir -p out/kdk-libs
           for lib in /Library/Developer/KDKs/*/System/Library/KernelSupport/lib*.a; do
             b=$(basename "$lib" .a)
-            safe_b=$(echo "$b" | tr "*" "_"); ar t "$lib" > "out/kdk-libs/$safe_b.members.txt" 2>&1 || true
+            ar t "$lib" > "out/kdk-libs/$b.members.txt" 2>&1 || true
             nm -m "$lib" > "out/kdk-libs/$b.nm.txt" 2>&1 || true
             lipo -info "$lib" >> out/kdk-libs/arch.txt 2>&1 || true
           done
