@@ -1,14 +1,19 @@
 diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 9383b42..e76fe22 100644
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -941,30 +941,62 @@ static void
- 		printf("SWEET TOUCH: NVT miso pulldown=%d pullup=%d\n", lo, hi);
+@@ -887,26 +887,58 @@ touch_nvt_diag(const char *tag, int pulltest)
  	}
  }
  
 -static void
 -touch_nvt_probe(void)
--{
++/* The IC answers only through one pin order (shim probe v10: MOSI=54,
++ * MISO=53, CLK=55, CS=56, VDDIO 1.8 V from ldoa18). Sweep all four
++ * orders and lock the one whose id reads 75 66 03 (NT36675). */
++static int
++touch_nvt_probe_once(const char *tag)
+ {
 -	printf("SWEET TOUCH: NVT probe, software reset only (GPIO 8 untouched)\n");
 -	{
 -		int rc = sweet_rpmh_vreg_enable("ldoa18", 1800);
@@ -16,30 +21,19 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 -		touch_wait(100);
 -	}
 -	for (unsigned i = 0; i < 5; ++i) {
--		touch_nvt_write_addr(NVT_SWRST_N8, 0x69);
--		touch_wait(5);
++	uint8_t id[6] = {0};
++
++	for (unsigned i = 0; i < 3; ++i) {
+ 		touch_nvt_write_addr(NVT_SWRST_N8, 0x69);
+ 		touch_wait(5);
 -		touch_nvt_write_addr(NVT_RD_FAST, 0x00);
 -		touch_nvt_print_id("reset", i);
 -		touch_wait(10);
--	}
+ 	}
 -	/* repeat every 3 s for 3 min so the line can be caught on the panel */
 -	for (unsigned n = 0; n < 60; ++n) {
 -		touch_wait(3000);
 -		touch_nvt_print_id("poll", n);
--	}
--	}
-+/* The IC answers through one pin order only (shim probe v9: MOSI=54,
-+ * MISO=53, CLK=55, CS=56, VDDIO 1.8 V from ldoa18). Sweep all four
-+ * orders and lock the one whose id reads 75 66 03 (NT36675). */
-+static int
-+touch_nvt_probe_once(const char *tag)
-+{
-+	uint8_t id[6] = {0};
-+
-+	for (unsigned i = 0; i < 3; ++i) {
-+		touch_nvt_write_addr(NVT_SWRST_N8, 0x69);
-+		touch_wait(5);
-+	}
 +	touch_nvt_write_addr(NVT_RD_FAST, 0x00);
 +	touch_nvt_page(NVT_ID_PAGE);
 +	touch_wait(250);
@@ -80,17 +74,10 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
 +			touch_wait(3000);
 +			touch_nvt_print_id("poll", n);
 +		}
-+	}
-+}
+ 	}
+ }
  
- /* Reset, then read the application chip ids. EIO if the IC never answers. */
- static int
- touch_fts_spi_start(void)
-@@ -1650,14 +1650,12 @@
- 		printf("SWEET TOUCH: SPI bit-bang order %u (pins %u/%u/%u/%u)\n",
- 		    order, touch_spi_order[order][0], touch_spi_order[order][1],
- 		    touch_spi_order[order][2], touch_spi_order[order][3]);
- 		touch_nvt_diag("before", 0);
+@@ -1596,8 +1628,6 @@ touch_thread(void *arg, wait_result_t result)
  		int nvt_mode = 0;
  		(void)PE_parse_boot_argn("sweetnvt", &nvt_mode, sizeof(nvt_mode));
  		if (nvt_mode) {
@@ -99,5 +86,3 @@ diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
  			touch_nvt_probe();
  			goto out;
  		}
- 		touch_spi_pins(order);
- 		if (touch_fts_fw_load()) {

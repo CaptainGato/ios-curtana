@@ -1,0 +1,22 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 5ac5450..9383b42 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -2076,10 +2076,13 @@ int
+ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ {
+ 	/* Board-specific helper: do not apply PMIC5-LDO policy to arbitrary resources. */
+-	if (!res || strcmp(res, "ldoc11") || mv < 2950 || mv > 3400) {
+-		printf("SWEET RPMH: expected ldoc11 and 2950..3400 mV\n");
+-		return EINVAL;
+-	}
++	/* Known rails only: touch VDDIO (pm6150 ldoa18, 1800 mV; the shim
++	 * probe proved the touch IC never answers without it) and the old
++	 * L11C workload. Anything else is a bug upstream, not a rail. */
++	int l18 = res && !strcmp(res, "ldoa18") && mv == 1800;
++	int c11 = res && !strcmp(res, "ldoc11") && mv >= 2950 && mv <= 3400;
++	if (!l18 && !c11) {
++		printf("SWEET RPMH: rails: ldoa18@1800 or ldoc11@2950-3400\n");
+ 	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
+ 		return EBUSY;
+ 	}
