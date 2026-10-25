@@ -1168,3 +1168,52 @@ FIFOs" -> SE7 FIFO depth differs, log will show the measured fw/probe.
 4. IMPORTANTE: mantener el guard del 0098 manual de proceso: SIEMPRE
    validar patches con git apply --check ≈ base exacto ANTES de push +
    verificar el buildtree después.
+
+## >>> 2026-10-25 tarde-3: MILESTONE - NT36675 responde en kernel iOS real; scan locked order 1; rpmh ldoa18 rc=0 <<<
+
+### Resultado de la boot nvt7 (kernel 28db1bf1, run CI 40191321453)
+- Cadena de parches 0097(valid)-0098(guard, con llave corregida)-0099(scan)
+  aplico en el runner (log "Applying patch" x3, sin Skipping).
+- Ring (logs/ring_raw5.bin):
+  * `SWEET RPMH: ldoa18 addr=0x41200 slave=4 ...` y
+    `SWEET RPMH: TCS0 ACTIVE 1800 mV mode=7 enable=1` -> el kernel voto
+    ldoa18 a 1800 mV por si mismo (rc=0).
+  * `NVT probe: l18 rc=0, scanning orders 0-3`.
+  * orden 0 (pins 53/54/55/56) -> id ff; **orden 1 (pins 54/53/55/56) ->
+    id 00 00 01 75 66 03 = NT36675** -> **`NVT locked order 1`**.
+  * polls: 30 lecturas ID estables, luego 14 ff (transicion ~90 s despues de
+    touch thread start; coincide con el arranque del pipeline de display
+    de iOS). HIPOTESIS: reset del panel compartiendo GPIO8, o rail apagada
+    por el display driver. Revisar con el poll de EVENT_BUF del 0100.
+- iOS llego a lock screen/SpringBoard NORMAL. Touch no reporta aun (falta
+  path de reportes). Bild: shim/out/shim-boot-nvt7.img sha 53f9425b.
+- Base file exacto para el 0100: /home/cg/work-ci/nbt2/xnu/bsd/dev/
+  sweet_touch.c (del buildtree del run 40191321453, POST 0099).
+
+### Workflow aprendido (repite SIEMPRE)
+1. Los patches se validan contra el buildtree base EXACTO (no contra
+   sinteticos propios del parche).
+2. El runner `git apply --check`-y-salta; solo el grep del buildtree
+   (o el ring) dice si el kernel lleva el parche.
+3. Chequeo de llaves C-aware tras generar el parche (estuvimos a punto de
+   romper el CI de nuevo con un if sin cerrar; la primera CI de fallo con
+   sweet_touch.o compile error).
+4. ADT de payload: SIEMPRE shim/out/sweet-nvt5.adt (3 GiB layout) — el
+   de boot-ci-nvt es el layout viejo de 1.2 GiB y cuelga launchd.
+5. cmdline de referencia (nvt5): debug=0xc serial=3 cpus=6 keepsyms=1
+   -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1
+   ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1
+   launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetspi=1 sweetnvt=1
+   sweettouchdelay=10 ufslogsecs=2
+
+### Proximo jalón: parche 0100 - REPORT PATH (poll EVENT_BUF 0x22D00)
+- Mapa NT36675 (driver vendor Xiaomi, /home/cg/work-ci/miatoll-ref/):
+  EVENT_BUF_ADDR=0x22D00. Lectura: touch_nvt_page(0x22D00); read reg 0x00
+  66 bytes (data desde rx[2] con nuestro frame).
+- Formato (POINT_DATA_LEN 65): finger i en data[1+6i]:
+  byte0=id<<3|status (1=down 2=move), x=(b1<<4)+(b3>>4), y=(b2<<4)+(b3&0xF),
+  w=b4, presion=b5 (b[63+i] extra para i<2). data[0]=sync byte.
+- PLAN: en el camino locked (dentro de touch_nvt_probe tras el scan),
+  reemplazar el poll de ID por poll de eventos con dump hex de los
+  primeros N reportes -> validar con el usuario tocando la pantalla y
+  leyendo el ring -> luego conectar el pipeline SweetHIDTouch y format.
