@@ -1,0 +1,32 @@
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 668a0b2..55e6203 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -7353,6 +7353,7 @@ touch_nvt_poll_loop(void)
+ {
+ 	uint8_t rep[68] = {0};
+ 	unsigned reports = 0, dumps = 0;
++		unsigned rp = 0;
+ 		int xf = 0;
+ 		(void)PE_parse_boot_argn("sweettouchxf", &xf, sizeof(xf));
+ 		printf("SWEET TOUCH: NVT xf=%d\n", xf);
+@@ -7383,13 +7384,17 @@ touch_nvt_poll_loop(void)
+ 						printf("SWEET TOUCH: NVT max x=%u y=%u\n", mx, my);
+ 					}
+ 				}
+-				if (px > 1079u || py > 2399u) {
++				if (px > 4095u || py > 4095u) {
+ 					if (rej++ < 20u) {
+ 						printf("SWEET TOUCH: NVT reject x=%u y=%u\n", px, py);
+ 					}
+ 				continue;
+ 			}
+-			mask |= 1u << id;
++			if (!(st.active & (1u << id)) && rp < 40u) {
++					printf("SWEET TOUCH: NVT raw id %u x=%u y=%u\n", id, px, py);
++					++rp;
++				}
++				mask |= 1u << id;
+ 			x[id] = (xf & 1) ? 1079 - (int)px : (int)px;
+ 				y[id] = (xf & 2) ? 2399 - (int)py : (int)py;
+ 		}
