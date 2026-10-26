@@ -1,4 +1,60 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
+## >>> UPDATE 2026-10-26: touch handoff rewrite (older 10-25 handoffs were lost in a docs-sync rewrite) <<<
+
+State of the NT36675 (curtana, hw 1.94) touch effort, reconstructed from
+commits, CI runs and files on disk. Observations vs guesses marked.
+
+- **Patch 0101 (`b138491`, CI `40195197721` SUCCESS) = NT36675 firmware
+  download, vendor `hw_crc` path.** Embedded stock fw
+  `novatek_ts_tianma_fw.bin` (139264 B, md5 `b5ce2a6298aa725ebf6e5ffaec9409f8`,
+  extracted from the phone's `/vendor/firmware` via OrangeFox; copies in
+  `logs/firmware/` locally and `/home/cg/work-ci/firmware/`). Partitions:
+  HDR bin[0..0x100) -> SRAM 0x27040 size 0xff (vendor transfers size+1);
+  ILM bin[0x100..0x13f60) -> SRAM 0x00000 size 0x013e5f crc 0x85264bf3;
+  DLM bin[0x18100..0x1c108) -> SRAM 0x27140 size 0x0041a7 crc 0xdf2f7896.
+  Sequence: bootloader reset (swrst 0x69 @0x3f0fe, RD_FAST off) -> SRAM
+  program in 128 B window chunks with explicit re-page -> ILM/DLM banks
+  (DES/LENGTH/GCRC, window 0x7e2) -> bld_crc_enable (bit7 @0x3f30e) ->
+  fw_crc_enable (0 @0x22d60, 0xAE @0x22d50) -> BOOT_RDY=1 @0x3f10d ->
+  poll reset state 0xA0..0xAF (10x10 ms, 3 tries). Event poll only on success.
+- **Patches 0102..0109** (CIs `40200246656`..`40228607587`, all SUCCESS):
+  coordinate/tracing iterations (Y range 2399, ~60 ms tap hold, `sweettouchxf`
+  axis flip, coords to 4095 + raw traces, contact duration, release on static
+  frame, repeat last 5 presses, print raw X/Y range since boot).
+- **Boots performed 25-10 (observation: images exist; guess: they were
+  booted and used to iterate on-screen).** `D:\ios-curtana\shim-boot-{nvt9,nvt10,nvt11}.img`
+  (14:53/15:08/15:21) and `xf1..xf3` (15:39, axis-flip variants of 0104);
+  then in `C:\Users\CG\Downloads\`: `raw`(0105)/`fast` 20:00-20:05,
+  `contact`(0106) 20:17, `s8/s15/s30`(0107, static-frame thresholds) 20:31,
+  `dbg` 20:35, `last`(0108) 20:53, `range`(0109) 21:08. HEAD `90014c3`
+  "Integrate GPU updates with tactile changes" 21:27.
+- **NO ring was pulled after nvt8** (`logs/ring_raw6.bin`, 25-10 13:36 is the
+  newest ring anywhere). So: fw-download success and coordinate mapping for
+  0102..0109 are NOT confirmed by logs. Touch end-to-end NOT confirmed.
+- **Repos:** this repo (WSL `/home/cg/ios-curtana-new`, branch
+  `gpu-touch-combined`) is the source of truth. `D:\ios-curtana` is a
+  separate, divergent clone (HEAD `cfd909b` 24-10 + dirty shim/) - do not
+  commit there.
+- **Device state:** last `fastboot reboot` hung ("Write to device failed"),
+  phone fell off the USB bus; needs physical re-plug (black EHCI port),
+  Power+Vol- if the screen stays dark.
+
+### Next action (touch)
+
+1. Re-plug phone, `fastboot devices`, then boot the already-built latest
+   image: `fastboot boot C:\Users\CG\Downloads\shim-boot-range.img`
+   (kernel 0109, CI `40228607587`). No new build needed unless it misbehaves.
+2. iOS should reach SpringBoard; tap several points across the screen for
+   ~30 s (the 0109 kernel logs raw X/Y range since boot).
+3. Reboot to OrangeFox and pull the ring:
+   `adb exec-out dd if=/dev/block/sda18 skip=27445714 count=1025 bs=4096 > ring_nvt12.bin`
+   -> grep `NVT bld`, `NVT fw info`, `NVT rep`, `raw`, `range`. Save to
+   `logs/` (out of git).
+4. Decide from the log: fw download failed -> variant with `nvt_eng_reset`
+   (0x5A @0x7fff80) before the bootloader reset; fw OK but static frames ->
+   inspect handshake 0x22d51; fw OK + moving coords -> fix offset/axis only.
+5. Reboot back to Android afterwards when done testing (preserve install).
+
 
 ## Status 2026-10-25 (docs sync)
 
