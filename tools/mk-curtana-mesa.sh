@@ -40,9 +40,11 @@ cd "$B"
 C_TGT1=-arch
 C_TGT2=arm64
 if ! "$CC_BIN" -arch arm64 -E - </dev/null >/dev/null 2>&1; then
-	C_TGT1=--target
+	# upstream clang: `-target X` (two tokens; `--target=X` is Apple clang
+	# syntax the Ubuntu build rejects)
+	C_TGT1=-target
 	C_TGT2=arm64-apple-ios16.5
-	echo "[*] $CC_BIN rejects -arch; using --target=$C_TGT2"
+	echo "[*] $CC_BIN rejects -arch; using -target $C_TGT2"
 fi
 
 PATCHES=$(cat "$REPO_ROOT"/tools/mesa/*.patch | sha256sum | cut -d' ' -f1)
