@@ -51,10 +51,10 @@ rm -rf "mesa-$VERSION/src/hakios-drm" "mesa-$VERSION/src/compiler/air"
 cp -r "$REPO_ROOT/tools/mesa/hakios-drm" "mesa-$VERSION/src/hakios-drm"
 cp -r "$REPO_ROOT/tools/mesa/air" "mesa-$VERSION/src/compiler/air"
 
-if [ ! -x venv/bin/python3 ]; then
-	python3 -m venv venv
-	venv/bin/pip -q install mako pyyaml packaging
-fi
+# Ensure the venv always carries everything meson needs (mako etc. live in
+# this python, which is also what venv's meson/ninja shim will run under).
+python3 -m venv venv 2>/dev/null || true
+venv/bin/pip -q install mako pyyaml packaging meson ninja
 export PATH="$B/venv/bin:$PATH"
 
 cat > cross.ini <<INI
@@ -76,6 +76,16 @@ endian = 'little'
 
 [properties]
 needs_exe_wrapper = true
+
+[built-in options]
+# iOS/Darwin build fixes:
+#  - _DARWIN_C_SOURCE: expose POSIX/Darwin declarations under the Apple SDK
+#  - HAVE_STRUCT_TIMESPEC: cross meson cannot detect it from a host test;
+#    without it c11/time.h redefines struct timespec against the SDK header
+#  - HAVE_FUNC_ATTRIBUTE_PACKED: cross meson cannot run the attribute test;
+#    without the define the mesa_prim PACKED static asserts fail
+c_args = ['-D_DARWIN_C_SOURCE=1', '-DHAVE_STRUCT_TIMESPEC=1', '-DHAVE_FUNC_ATTRIBUTE_PACKED=1']
+cpp_args = ['-D_DARWIN_C_SOURCE=1', '-DHAVE_STRUCT_TIMESPEC=1', '-DHAVE_FUNC_ATTRIBUTE_PACKED=1']
 INI
 
 DRIVERS="${DRIVERS:-softpipe,freedreno}"
