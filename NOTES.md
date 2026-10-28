@@ -16,13 +16,19 @@ guesses marked as before.
    the live FDT, so its PMIC wire is unknown; the scan discovers it. Root
    cause of "all buttons dead" still needs a boot log — 0110 produces that
    log.
-2. **Mesa "steps of Claude" chain COMPLETED LOCALLY (2026-10-28 evening,
+2. **Mesa "steps of Claude" chain DONE AND CI-CONFIRMED (2026-10-28,
    commits through `7d9e093` + amend): the FULL Adreno 618 Mesa Freedreno +
    EAGL + AIR2NIR build now succeeds end-to-end in the WSL root sandbox** —
    out/libOSMesa.8.dylib (14.8 MB), libhakios.gl.dylib, gl_test, air_run,
    metal_test (mkeagl: 409 entries, 356 passed, 30 by hand, 23 without a
-   function). Confirmed—but **not yet by CI (run `40733691989`) and not
-   linked into a root image yet**. Fixes applied on top of Claude's plan:
+   function). **CI `40733691989` build-linux SUCCESS (4m33s), artifact
+   `curtana-mesa-metal-linux` downloaded and verified:
+   `/home/cg/work-ci/mesa-ci/` (all five Mach-O arm64, NOUNDEFS/DYLDLINK/
+   TWOLEVEL). The run stays "queued" in the UI only until build-mac picks a
+   runner (best-effort, continue-on-error). NOT yet installed into any root
+   image — next Mesa step is adding /redwood/lib+bin to a root image
+   (root-image reflash, needs user confirmation separately).** Fixes applied
+   on top of Claude's plan:
    - `-target arm64-apple-ios16.5` instead of `-arch arm64` for upstream
      clang (two tokens).
    - `ld-pv.sh` linker wrapper (clang passes legacy `-iphoneos_version_min`,
@@ -90,8 +96,11 @@ The mesa run `40727888439` failed at meson again (upstream clang needs
    fw OK + static frames → handshake 0x22d51; fw OK + coords → offset/axis
    only. Keys: candidate lines name which PMIC (SID0/SID4) reads through and
    which GPIO2 is firmware-enabled for volume-up.
-5. Mesa: wait for `40730248611`; if green, stage artifacts and `--install`
-   onto the next root image; if red, read the log and fix one flag at a time.
+5. Mesa: **DONE — CI green, artifacts staged in `/home/cg/work-ci/mesa-ci/`**.
+   The remaining Mesa work is deployment: create `/redwood/{lib,bin}` in the
+   next root image (v16) and boot once with the gl_test/air_run binaries
+   reachable; that ride-along belongs to the next root reflash (needs user
+   confirmation, bigger op).
 6. `shim-boot-range.img` (0109 touch-only) stays as a fallback test image in
    Downloads.
 
