@@ -70,6 +70,33 @@ guesses marked as before.
 
 ### Next action (ordered)
 
+**2026-10-28 LATE UPDATE: user PAUSED the touch/buttons bring-up and chose
+GPU-first. Touch state to resume later: `shim-boot-keys13.img` booted OK
+(phone reached poll loop); screen showed increasingly large `SWEET TOUCH: NVT
+rep N` lines whose first bytes are ALL 0xFF (user report: "NVT poll (número)
+y sale ff ff ff ff ff"). Meaning: the poll loop started, so
+`touch_nvt_download()` returned 0 (fw "download" claimed success), but the
+IC's event SRAM reads are all 0xFF (MISO float / chip not really up / XRAM
+window wrong). DECISION STILL NEEDS THE RING: the decider lines (`NVT bld`,
+`NVT fw info`, `BROKEN`) print BEFORE the poll lines and only the ring has
+them. Resume recipe: OrangeFox recovery is now staged on this machine —
+`C:\Users\CG\Downloads\orangefox-miatoll\recovery.img` (zip md5 verified
+7ccf6b7496385d64583b68ffc38129bd, miatoll stable R11.1_1, covers curtana);
+boot it temp (`fastboot boot C:\Users\CG\Downloads\orangefox-miatoll\recovery.img`),
+then `adb exec-out dd if=/dev/block/sda18 skip=27445714 count=1025 bs=4096 >
+ring_keys13.bin` (save OUT of git), grep `NVT bld|fw info|BROKEN|rep`.**
+
+**GPU-DEPLOYMENT TRACK (active):** mkiosroot.sh prerequisites ALL verified
+working on WSL Ubuntu here: hfsprogs installed (mkfs.hfsplus/fsck.hfsplus
+present), kernel hfsplus RW loop-mount smoke-tested OK (write+read back),
+apfs-fuse at /usr/local/bin/apfs-fuse, rsync present, 108 GB free. The
+20H392 iPhone10,3 dmg assets exist locally at `D:\ios-curtana\
+20H392__iPhone10,3\` (087-86593-047.dmg 2.7 GB, 087-86622-047.dmg 109 MB,
+087-86698-044.dmg 4.7 GB, 087-86715-047.dmg 10 MB). v15 has never been built/
+stored on THIS machine — the plan is to build root image **v16 from the
+dmg's with mkiosroot.sh + reapply the v-changelog deltas + ADD /redwood/
+{lib,bin} with the mesa-ci artifacts**, then have the user flash.
+
 **2026-10-28 UPDATE: xnu run `40727888344` SUCCESS (kernel = patches
 0001–0109 NVT + 0110 keys scan; sha256 in the artifact's SHA256SUMS, verified
 OK; binary contains `SWEET KEYS: candidate` and `SWEET TOUCH` strings).
