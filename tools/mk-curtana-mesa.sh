@@ -35,6 +35,16 @@ fi
 mkdir -p "$B/out"
 cd "$B"
 
+# Apple clang accepts `-arch arm64`; upstream clang (e.g. Ubuntu) rejects
+# it, so fall back to `--target=` lazily.
+C_TGT1=-arch
+C_TGT2=arm64
+if ! "$CC_BIN" -arch arm64 -E - </dev/null >/dev/null 2>&1; then
+	C_TGT1=--target
+	C_TGT2=arm64-apple-ios16.5
+	echo "[*] $CC_BIN rejects -arch; using --target=$C_TGT2"
+fi
+
 PATCHES=$(cat "$REPO_ROOT"/tools/mesa/*.patch | sha256sum | cut -d' ' -f1)
 if [ ! -d "mesa-$VERSION" ] || [ "$(cat "mesa-$VERSION/.curtana-patches" 2>/dev/null || true)" != "$PATCHES" ]; then
 	[ -f "mesa-$VERSION.tar.xz" ] || curl -sL --fail -o "mesa-$VERSION.tar.xz" "https://archive.mesa3d.org/mesa-$VERSION.tar.xz"
@@ -59,9 +69,9 @@ export PATH="$B/venv/bin:$PATH"
 
 cat > cross.ini <<INI
 [binaries]
-c = ['$CC_BIN', '-arch', 'arm64', '-isysroot', '$SDK']
-cpp = ['$CC_BIN++', '-arch', 'arm64', '-isysroot', '$SDK', '-fuse-cxa-atexit']
-objc = ['$CC_BIN', '-arch', 'arm64', '-isysroot', '$SDK']
+c = ['$CC_BIN', '$C_TGT1', '$C_TGT2', '-isysroot', '$SDK']
+cpp = ['$CC_BIN++', '$C_TGT1', '$C_TGT2', '-isysroot', '$SDK', '-fuse-cxa-atexit']
+objc = ['$CC_BIN', '$C_TGT1', '$C_TGT2', '-isysroot', '$SDK']
 ar = 'llvm-ar'
 ranlib = 'llvm-ranlib'
 strip = 'llvm-strip'
@@ -107,7 +117,7 @@ cp "mesa-$VERSION/src/mapi/glapi/registry/gl.xml" out/gl.xml
 EAGL_DIR="$REPO_ROOT/tools/mesa/eagl"
 python3 "$EAGL_DIR/mkeagl.py" "$EAGL_DIR/eagl_slots.txt" out/gl.xml out/exported-gl.txt "$EAGL_DIR/eagl.c" > out/eagl_gen.h
 
-DYN="$CC_BIN -arch arm64 -isysroot $SDK -O2"
+DYN="$CC_BIN $C_TGT1 $C_TGT2 -isysroot $SDK -O2"
 $DYN -dynamiclib -install_name /redwood/lib/libhakios.gl.dylib -Iout -I"$EAGL_DIR" 	-framework CoreFoundation -framework IOKit -framework IOSurface -lobjc 	out/libOSMesa.8.dylib -o out/libhakios.gl.dylib "$EAGL_DIR/eagl.c" "$EAGL_DIR/gl_osmesa.c"
 $DYN -I"$EAGL_DIR" -framework CoreFoundation -framework IOKit out/libOSMesa.8.dylib -o out/gl_test "$EAGL_DIR/gl_test.c"
 $DYN -fobjc-arc -Wno-deprecated-declarations -framework Foundation -framework CoreGraphics 	-framework CoreImage -framework IOKit -framework Metal -framework OpenGLES 	-lMobileGestalt -o out/metal_test "$EAGL_DIR/metal_test.m"

@@ -1,4 +1,85 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
+## >>> UPDATE 2026-10-28: mesa fix + buttons scan patch, CI launched, device stop unchanged at "boot range.img + pull ring" <<<
+
+Session agent: OpenCode (GLM). Source of truth still WSL
+`/home/cg/ios-curtana-new` branch `gpu-touch-combined`. Observations vs
+guesses marked as before.
+
+1. **Buttons: `0110-sweet-keys-scan-sources.patch` added (commit `2d63fbb`,
+   validated UTF-8/LF, `git apply --check` forward AND reverse strict against a
+   reconstructed post-0109 `sweet_keys.c`)**. `sweet_keys_init()` now probes
+   PON candidates (PPID 0x008 SID0 preferred, 0x408 SID4 fallback) and GPIO
+   candidates (0x4c1 PM6150L first, 0x0c1 PM6150@0 fallback) with
+   per-candidate diagnostic lines; volume-up only accepted when its GPIO2 is
+   confirmed firmware-enabled as input. Rationale: FDT proves PON
+   (kpdpwr+resin) on PM6150@0 SID0, but no volume-up node exists anywhere in
+   the live FDT, so its PMIC wire is unknown; the scan discovers it. Root
+   cause of "all buttons dead" still needs a boot log — 0110 produces that
+   log.
+2. **Mesa (Claude's steps done, commit `6691e50`):** `tools/mk-curtana-mesa.sh`
+   cross.ini now sets `[built-in options] c_args/cpp_args = -D_DARWIN_C_SOURCE=1
+   -DHAVE_STRUCT_TIMESPEC=1 -DHAVE_FUNC_ATTRIBUTE_PACKED=1` (cross meson cannot
+   run its detection programs → the mesa_prim PACKED static-assert failure and
+   the c11/time.h timespec clash), and the script now always recreates its
+   venv with **meson+ninja+mako+pyyaml+packaging** — the earlier "mako >= 0.8.0
+   required" failure was because system `/usr/bin/meson` ran under a framework
+   python with no mako; venv meson fixes that. Added
+   `.github/workflows/mesa.yml` (ubuntu builder, 30 min; macos best-effort) —
+   pushing to `main` with `tools/**` triggers it; `workflow_dispatch` also
+   works once it exists on the default branch.
+3. **CI launched 2026-10-28:** pushed `6691e50` fast-forward to `main` → runs
+   **mesa `40726600314`** and **xnu `40726600272`** (queue). NOTE: xnu
+   `40726600272` builds series 0001–0109 WITHOUT 0110 (queued before the patch
+   commit); after 2d63fbb is pushed to main, `cancel-in-progress` replaces it
+   with a kernel containing both the NVT touch series and the buttons scan —
+   one image then tests touch AND buttons. Mesa artifact:
+   `curtana-mesa-metal-linux` (libOSMesa.8.dylib, libhakios.gl.dylib,
+   gl_test, air_run, metal_test).
+4. **Touch ground truth re-checked (no boot yet):** the NVT path needs BOTH
+   boot args
+   `sweetspi=<1..4>` (enables the bit-banged SPI branch) AND `sweetnvt=1`
+   (selects `touch_nvt_probe()`; source: sweet_touch.c touch thread —
+   `PE_parse_boot_argn("sweetspi")` gates, `sweetnvt` selects backend).
+   **Verified `C:\Users\CG\Downloads\shim-boot-range.img` cmdline contains
+   `sweetfb_hz=30 sweetspi=1 sweetnvt=1 sweettouchdelay=10`** — the ready
+   image is correctly configured for the NVT attempt. (The older "no
+   sweetspi" finding applied to an FTS-era image only.)
+5. **Deferred:** 0095 draft (auto-probe of the 4 SPI pad orders) — superseded
+   by the NVT direction; the draft stays in the Windows copy
+   `ios-curtana-main/xnu/patches/0095-*.patch` for later if pad order turns
+   out wrong.
+
+### Next action (ordered)
+
+1. Push `gpu-touch-combined` (now `2d63fbb`) to `main` → xnu CI rebuilds with
+   0110; download artifact (`gh run download <id> -n kernel`), else keep
+   40726600272's kernel if 0110 turns out mis-ordered.
+2. Build one image that tests BOTH: `python3 tools/mkpayload.py
+   xnu/out-kernel/kernel.development.sweet shim/out/<adt> shim/out/payload-keys.bin
+   --cmdline "debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam
+   -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1
+   wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1
+   sweetfb_hz=30 sweetspi=1 sweetnvt=1 sweettouchdelay=10"`, then
+   `shim/build.sh` + rename `shim-boot-keys13.img`.
+3. Physical (user): re-plug phone (last `fastboot reboot` hung, "Write to
+   device failed"), `fastboot devices`, then EITHER
+   `fastboot boot C:\Users\CG\Downloads\shim-boot-range.img` (0109, touch
+   only) for the 10-26 touch-only sequence, OR the new keys13
+   image once built (touch + buttons scan). Then: tap around ~30 s;
+   then OrangeFox and `dd` ring per the 10-26 block above (`ring_nvt12.bin`),
+   grep `NVT bld`, `NVT fw info`, `NVT rep`, `raw`, `range`, and
+   `SWEET KEYS: candidate`.
+4. Decide: fw-download fail → `nvt_eng_reset` variant; fw OK static frames →
+   handshake 0x22d51; fw OK coords → offset/axis. Buttons: candidate lines
+   tell whether PON reads through and which PMIC owns volume-up.
+5. Mesa: when run 40726600314 goes green, stage artifacts under
+   `/home/cg/work-ci/firmware/`-style local dirs (out of git) and try
+   `--install` onto the next root image; if red, read the log and fix the
+   next define/flags one at a time.
+6. Windows copy `ios-curtana-main` is a stale mirror (local-only
+   mesa.yml/patch-mesa.py + 0095/0096 drafts now superseded by the repo);
+   do not push from it.
+
 ## >>> UPDATE 2026-10-26: touch handoff rewrite (older 10-25 handoffs were lost in a docs-sync rewrite) <<<
 
 State of the NT36675 (curtana, hw 1.94) touch effort, reconstructed from

@@ -70,6 +70,7 @@ jobs:
       - name: Install dependencies
         run: |
           brew install meson ninja bison flex llvm coreutils
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
