@@ -114,15 +114,16 @@ iOSRoot) confirmed. Done:
    a618_gmu.bin 32768, a630_sqe.fw 32136, a615_zap.mdt/b00/b01/b02/elf — md5
    verified per-file against the device). fsck clean after umount: "volume
    iOSRoot appears to be OK". Disk usage 13G/16G.
-4. The image = **`C:\Users\CG\Downloads\ios16-root-20H392-v16.img`** (copy in
-   progress of the same 16 GiB file; sha256 printed after copy). Flash:
-   `fastboot flash -S 512M userdata <img>` (same-length as v15's 16 GiB
-   layout, no GPT changes).
+4. The image = **`D:\iosimg\ios16-root-20H392-v16.img`** (16 GiB same content
+   as phone-v15-16g.bin; sha256 checked after copy; NOTE: C: is FULL —
+   Downloads could not hold it, D:\iosimg\ created for device images). Flash:
+   `fastboot flash -S 512M userdata D:\iosimg\ios16-root-20H392-v16.img`
+   (same-length as v15's 16 GiB layout, no GPT changes).
 5. GPU test boot image built+verified (payload roundcheck OK; cmdline
    verified verbatim inside payload with `sweetgpu=22 gpu=1`, NVT touch args
    REMOVED to stop the poll spam, kernel = the verified CI kernel
-   `[kernel-kd` sha256 `3a71d493…d760b` = CI 40727888344): **`C:\Users\CG\Downloads\sh
-im-boot-gpu22.img`**.
+   `[kernel-kd` sha256 `3a71d493…d760b` = CI 40727888344): **`D:\iosimg\shim-boot
+-gpu22.img`**.
 
 **2026-10-28 UPDATE: xnu run `40727888344` SUCCESS (kernel = patches
 0001–0109 NVT + 0110 keys scan; sha256 in the artifact's SHA256SUMS, verified
