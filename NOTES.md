@@ -86,16 +86,43 @@ boot it temp (`fastboot boot C:\Users\CG\Downloads\orangefox-miatoll\recovery.im
 then `adb exec-out dd if=/dev/block/sda18 skip=27445714 count=1025 bs=4096 >
 ring_keys13.bin` (save OUT of git), grep `NVT bld|fw info|BROKEN|rep`.**
 
-**GPU-DEPLOYMENT TRACK (active):** mkiosroot.sh prerequisites ALL verified
-working on WSL Ubuntu here: hfsprogs installed (mkfs.hfsplus/fsck.hfsplus
-present), kernel hfsplus RW loop-mount smoke-tested OK (write+read back),
-apfs-fuse at /usr/local/bin/apfs-fuse, rsync present, 108 GB free. The
-20H392 iPhone10,3 dmg assets exist locally at `D:\ios-curtana\
-20H392__iPhone10,3\` (087-86593-047.dmg 2.7 GB, 087-86622-047.dmg 109 MB,
-087-86698-044.dmg 4.7 GB, 087-86715-047.dmg 10 MB). v15 has never been built/
-stored on THIS machine — the plan is to build root image **v16 from the
-dmg's with mkiosroot.sh + reapply the v-changelog deltas + ADD /redwood/
-{lib,bin} with the mesa-ci artifacts**, then have the user flash.
+**GPU-DEPLOYMENT TRACK (active) — 2026-10-28 update: v16 BUILT locally and
+STAGED for flash.** The 10-28 hands-on: OrangeFox recovery booted from
+`C:\Users\CG\Downloads\orangefox-miatoll\recovery.img` (zip md5
+7ccf6b7496385d64583b68ffc38129bd, miatoll stable R11.1_1); on THIS phone
+(cur)}: block-userdata = **/dev/block/sda18** (109,786,956 KB = 104.7 GiB;
+the old sweet-device "sda34 = userdata" notes above do NOT apply here).
+HFS volume header at block 1 = `HX` + `HFSJ` (case-sensitive journaled
+iOSRoot) confirmed. Done:
+1. Pulled the persistent ring from the tail of sda18:
+   `adb exec-out "dd if=/dev/block/sda18 skip=27445714 count=1025 bs=4096
+   2>/dev/null"` → `/home/cg/work-ci/ring_keys13.bin` (4,198,400 B; contains
+   27 SWEET KEYS, 5 SWEET TOUCH lines — parked, analyse with the touch task).
+   NOTE adb exec-out merges device dd stderr INTO the stream: always suffix
+   device dd with `2>/dev/null` and redirect via WSL bash, NOT PowerShell.
+2. Dumped the first 16 GiB of sda18 (= the live v15 root):
+   `adb exec-out "dd if=/dev/block/sda18 bs=1048576 count=16384 2>/dev/null"`
+   → `/home/cg/work-ci/phone-v15-16g.bin` (17,179,869,184 B EXACTLY, sha256
+   `01df6147…e3106`, ~8 min over USB2 at ~36 MB/s). fsck.hfsplus -fy repaired
+   it ("volume iOSRoot was repaired successfully"), mounted rw under
+   /mnt/v15root (kernel hfsplus rw - verified), v15 markers verified
+   (HAL.disabled/VirtualAudio move + SystemConfiguration preferences.plist).
+3. Installed into the mounted root: `/redwood/{lib,bin}` (mk-curtana-mesa
+   out files: libOSMesa.8.dylib 14,810,028 B, libhakios.gl.dylib, gl_test,
+   air_run, metal_test) and `/firm` + `/fw` (Adreno 618 firmware pulled from
+   the phone's intact Android /vendor/firmware via OrangeFox mount:
+   a618_gmu.bin 32768, a630_sqe.fw 32136, a615_zap.mdt/b00/b01/b02/elf — md5
+   verified per-file against the device). fsck clean after umount: "volume
+   iOSRoot appears to be OK". Disk usage 13G/16G.
+4. The image = **`C:\Users\CG\Downloads\ios16-root-20H392-v16.img`** (copy in
+   progress of the same 16 GiB file; sha256 printed after copy). Flash:
+   `fastboot flash -S 512M userdata <img>` (same-length as v15's 16 GiB
+   layout, no GPT changes).
+5. GPU test boot image built+verified (payload roundcheck OK; cmdline
+   verified verbatim inside payload with `sweetgpu=22 gpu=1`, NVT touch args
+   REMOVED to stop the poll spam, kernel = the verified CI kernel
+   `[kernel-kd` sha256 `3a71d493…d760b` = CI 40727888344): **`C:\Users\CG\Downloads\sh
+im-boot-gpu22.img`**.
 
 **2026-10-28 UPDATE: xnu run `40727888344` SUCCESS (kernel = patches
 0001–0109 NVT + 0110 keys scan; sha256 in the artifact's SHA256SUMS, verified
