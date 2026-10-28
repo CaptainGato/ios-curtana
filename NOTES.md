@@ -16,17 +16,30 @@ guesses marked as before.
    the live FDT, so its PMIC wire is unknown; the scan discovers it. Root
    cause of "all buttons dead" still needs a boot log — 0110 produces that
    log.
-2. **Mesa (Claude's steps done, commit `6691e50`):** `tools/mk-curtana-mesa.sh`
-   cross.ini now sets `[built-in options] c_args/cpp_args = -D_DARWIN_C_SOURCE=1
-   -DHAVE_STRUCT_TIMESPEC=1 -DHAVE_FUNC_ATTRIBUTE_PACKED=1` (cross meson cannot
-   run its detection programs → the mesa_prim PACKED static-assert failure and
-   the c11/time.h timespec clash), and the script now always recreates its
-   venv with **meson+ninja+mako+pyyaml+packaging** — the earlier "mako >= 0.8.0
-   required" failure was because system `/usr/bin/meson` ran under a framework
-   python with no mako; venv meson fixes that. Added
-   `.github/workflows/mesa.yml` (ubuntu builder, 30 min; macos best-effort) —
-   pushing to `main` with `tools/**` triggers it; `workflow_dispatch` also
-   works once it exists on the default branch.
+2. **Mesa "steps of Claude" chain COMPLETED LOCALLY (2026-10-28 evening,
+   commits through `7d9e093` + amend): the FULL Adreno 618 Mesa Freedreno +
+   EAGL + AIR2NIR build now succeeds end-to-end in the WSL root sandbox** —
+   out/libOSMesa.8.dylib (14.8 MB), libhakios.gl.dylib, gl_test, air_run,
+   metal_test (mkeagl: 409 entries, 356 passed, 30 by hand, 23 without a
+   function). Confirmed—but **not yet by CI (run `40733691989`) and not
+   linked into a root image yet**. Fixes applied on top of Claude's plan:
+   - `-target arm64-apple-ios16.5` instead of `-arch arm64` for upstream
+     clang (two tokens).
+   - `ld-pv.sh` linker wrapper (clang passes legacy `-iphoneos_version_min`,
+     which Ubuntu ld64.lld rejects; wrapper rewrites it to
+     `-platform_version ios X Y`), wired via `-fuse-ld=.../ld-pv.sh`.
+   - NEW `tools/mesa/disk-cache-dladdr.patch`: disk_cache.h includes dlfcn.h
+     under HAVE_DLADDR (cross meson never defines HAVE_DLFCN_H; iOS declares
+     dladdr/Dl_info only with _DARWIN_C_SOURCE).
+   - `cpp_args += -Wno-c++11-narrowing` (fd6_compute.cc HLSQ localsize int
+     narrowing; P3 values always non-negative).
+   - Packaging fallbacks: `llvm-install-name-tool` (no Apple
+     install_name_tool on Linux), `llvm-nm -g --defined-only` (llvm-nm
+     layout identical to `nm -gU` w/ the awk $3 rule; verified 1296 GL
+     exports).
+   - venv guarantees `meson+ninja+mako` (the setup failure chain: system
+     meson → no mako; venv meson fixed). `meson configure` needs PATH with
+     the venv first (ninja's auto-regenerate execs "python3").
 3. **CI launched 2026-10-28:** pushed `6691e50` fast-forward to `main` → runs
    **mesa `40726600314`** and **xnu `40726600272`** (queue). NOTE: xnu
    `40726600272` builds series 0001–0109 WITHOUT 0110 (queued before the patch
