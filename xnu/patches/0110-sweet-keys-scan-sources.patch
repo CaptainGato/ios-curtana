@@ -1,0 +1,77 @@
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -152,23 +152,57 @@
+ 		    keys_version, count);
+ 		return;
+ 	}
+-	keys_pon_apid = keys_find_apid(0x008, count);
+-	keys_gpio_apid = keys_find_apid(0x4c1, count);
+-	uint8_t pon = 0, gpio = 0, mode = 0, en = 0, subtype = 0;
+-	bool pok = keys_read(keys_pon_apid, KEYS_PON_RT, &pon);
+-	bool gok = keys_read(keys_gpio_apid, KEYS_GPIO_RT, &gpio);
+-	bool mok = keys_read(keys_gpio_apid, 0xc140, &mode);
+-	bool eok = keys_read(keys_gpio_apid, 0xc146, &en);
+-	bool sok = keys_read(keys_gpio_apid, 0xc105, &subtype);
+-	printf("SWEET KEYS: arb=%#x apids=%u pon-apid=%u gpio4-apid=%u pon=%#x/%d gpio=%#x/%d mode=%#x/%d en=%#x/%d subtype=%#x/%d\n",
+-	    keys_version, count, keys_pon_apid, keys_gpio_apid,
+-	    pon, pok, gpio, gok, mode, mok, en, eok, subtype, sok);
+-	/* GPIO configuration belongs to firmware. Diagnose, never repair it here. */
+-	unsigned dir = subtype >= 0x10u && subtype <= 0x13u ?
+-	    mode & 3u : (mode >> 4) & 7u;
+-	if (!eok || !mok || !sok || !(en & 0x80u) || (dir != 0 && dir != 2)) {
+-		printf("SWEET KEYS: GPIO2 not confirmed enabled as input; volume-up withheld, PMIC unchanged\n");
+-		keys_gpio_apid = KEYS_NO_APID;
++	/*
++	 * Source scan (all reads are passive observer EXT_READL): sweet used
++	 * PON = PM6150@0 (SID 0) and volume-up = PM6150L (SID 4) GPIO2. This
++	 * board family (curtana/miatoll) may wire volume-up to the PM6150@0
++	 * GPIO2 or (*rare*) put the PON on SID 4, so each pair is probed and
++	 * the readable/validated one is kept.
++	 */
++	uint16_t pon_apid_0 = keys_find_apid(0x008, count);
++	uint16_t pon_apid_4 = keys_find_apid(0x408, count);
++	uint16_t gpio_apid_0 = keys_find_apid(0x0c1, count);
++	uint16_t gpio_apid_4 = keys_find_apid(0x4c1, count);
++	uint16_t pon_cands[2] = {pon_apid_0, pon_apid_4};
++	uint16_t gpio_cands[2] = {gpio_apid_4, gpio_apid_0};
++	const char *pon_name[2] = {"PM6150@0(SID0)", "PM6150L@4(SID4)"};
++	const char *gpio_name[2] = {"PM6150L@4(SID4)", "PM6150@0(SID0)"};
++	uint8_t pon = 0, gpio = 0;
++	bool pok = false, gok = false;
++	for (unsigned i = 0; i < 2; ++i) {
++		uint8_t t = 0;
++		bool ok = keys_read(pon_cands[i], KEYS_PON_RT, &t);
++		printf("SWEET KEYS: candidate %s pon-apid=%u read=%d status=%#x\n",
++		    pon_name[i], pon_cands[i], ok, t);
++		if (ok && !pok) {
++			pok = ok;
++			keys_pon_apid = pon_cands[i];
++			pon = t;
++		}
++	}
++	for (unsigned i = 0; i < 2; ++i) {
++		uint8_t t = 0, tm = 0, te = 0, ts = 0;
++		bool ok = keys_read(gpio_cands[i], KEYS_GPIO_RT, &t);
++		bool mok = keys_read(gpio_cands[i], 0xc140, &tm);
++		bool eok = keys_read(gpio_cands[i], 0xc146, &te);
++		bool sok = keys_read(gpio_cands[i], 0xc105, &ts);
++		printf("SWEET KEYS: candidate %s gpio-apid=%u read=%d/%d/%d/%d status=%#x mode=%#x en=%#x subtype=%#x\n",
++		    gpio_name[i], gpio_cands[i], ok, mok, eok, sok, t, tm, te, ts);
++		/* GPIO configuration belongs to firmware. Diagnose, never
++		 * repair it here. */
++		unsigned dir = ts >= 0x10u && ts <= 0x13u ?
++		    tm & 3u : (tm >> 4) & 7u;
++		bool input_ok = ok && mok && eok && sok && (te & 0x80u) &&
++		    (dir == 0 || dir == 2);
++		if (input_ok) {
++			keys_gpio_apid = gpio_cands[i];
++			gpio = t;
++			gok = ok;
++			break;
++		}
++	}
++	if (keys_gpio_apid == KEYS_NO_APID) {
++		printf("SWEET KEYS: no GPIO source confirmed as input; volume-up withheld, PMIC unchanged\n");
+ 	}
+ 	if (!pok && !gok) {
+ 		printf("SWEET KEYS: no readable keys; polling retained for recovery\n");
