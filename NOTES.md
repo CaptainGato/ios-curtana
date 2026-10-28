@@ -51,21 +51,38 @@ guesses marked as before.
 
 ### Next action (ordered)
 
-1. Push `gpu-touch-combined` (now `2d63fbb`) to `main` → xnu CI rebuilds with
-   0110; download artifact (`gh run download <id> -n kernel`), else keep
-   40726600272's kernel if 0110 turns out mis-ordered.
-2. Build one image that tests BOTH: `python3 tools/mkpayload.py
-   xnu/out-kernel/kernel.development.sweet shim/out/<adt> shim/out/payload-keys.bin
-   --cmdline "debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam
-   -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1
-   wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1
-   sweetfb_hz=30 sweetspi=1 sweetnvt=1 sweettouchdelay=10"`, then
-   `shim/build.sh` + rename `shim-boot-keys13.img`.
-3. Physical (user): re-plug phone (last `fastboot reboot` hung, "Write to
-   device failed"), `fastboot devices`, then EITHER
-   `fastboot boot C:\Users\CG\Downloads\shim-boot-range.img` (0109, touch
-   only) for the 10-26 touch-only sequence, OR the new keys13
-   image once built (touch + buttons scan). Then: tap around ~30 s;
+**2026-10-28 UPDATE: xnu run `40727888344` SUCCESS (kernel = patches
+0001–0109 NVT + 0110 keys scan; sha256 in the artifact's SHA256SUMS, verified
+OK; binary contains `SWEET KEYS: candidate` and `SWEET TOUCH` strings).
+Boot image built and verified verbatim cmdline:
+`C:\Users\CG\Downloads\shim-boot-keys13.img` (17.35 MB; payload
+`/home/cg/work-ci/payload-keys13.bin`, ADT
+`/home/cg/work-ci/curtana-101.adt` extracted from the tested
+payload-101.bin; local rebuild recipe `/home/cg/work-ci/build-keys13.sh`).**
+The mesa run `40727888439` failed at meson again (upstream clang needs
+`-target X` two tokens, not `-arch` and not `--target X` split); fixed in
+`802cfde` and re-running as `40730248611`.
+
+1. Physical (user, phone): `fastboot devices` (re-plug first — last `fastboot
+   reboot` hung), then `fastboot boot C:\Users\CG\Downloads\shim-boot-keys13.img`.
+   This ONE image tests touch (NVT fw download + coordinates, args already in
+   cmdline: `sweetspi=1 sweetnvt=1 sweettouchdelay=10`) AND buttons (0110
+   candidate scans).
+2. Tap around the screen ~30 s; press power/vol+/vol- a few times.
+3. Reboot to OrangeFox; pull the ring
+   (`adb exec-out dd if=/dev/block/sda18 skip=27445714 count=1025 bs=4096 >
+   ring_keys13.bin`), save OUT of git, grep: `NVT bld`, `NVT fw info`,
+   `NVT rep`, `raw`, `range`, `SWEET KEYS: candidate`.
+4. Decide as per the 10-26 table: fw download fail → `nvt_eng_reset` variant;
+   fw OK + static frames → handshake 0x22d51; fw OK + coords → offset/axis
+   only. Keys: candidate lines name which PMIC (SID0/SID4) reads through and
+   which GPIO2 is firmware-enabled for volume-up.
+5. Mesa: wait for `40730248611`; if green, stage artifacts and `--install`
+   onto the next root image; if red, read the log and fix one flag at a time.
+6. `shim-boot-range.img` (0109 touch-only) stays as a fallback test image in
+   Downloads.
+
+Previous next-action list (kept for context):
    then OrangeFox and `dd` ring per the 10-26 block above (`ring_nvt12.bin`),
    grep `NVT bld`, `NVT fw info`, `NVT rep`, `raw`, `range`, and
    `SWEET KEYS: candidate`.
