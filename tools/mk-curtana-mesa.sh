@@ -36,16 +36,58 @@ mkdir -p "$B/out"
 cd "$B"
 
 # Apple clang accepts `-arch arm64`; upstream clang (e.g. Ubuntu) rejects
-# it, so fall back to `--target=` lazily.
+# it, so fall back to lazily building the target flags, and with upstream
+# clang also force the Mach-O linker (`ld64.lld`): without it clang falls
+# back to the GNU linker on PATH, which cannot do Mach-O targets.
 C_TGT1=-arch
 C_TGT2=arm64
+LDARG=""
 if ! "$CC_BIN" -arch arm64 -E - </dev/null >/dev/null 2>&1; then
 	# upstream clang: `-target X` (two tokens; `--target=X` is Apple clang
 	# syntax the Ubuntu build rejects)
 	C_TGT1=-target
 	C_TGT2=arm64-apple-ios16.5
-	echo "[*] $CC_BIN rejects -arch; using -target $C_TGT2"
+	LLD=""
+	for v in $(ls /usr/bin/ld64.lld* /usr/local/bin/ld64.lld* 2>/dev/null | sort -V | tail -1); do
+		LT=$(command -v "$v") && { LLD="$LT"; break; }
+	done
+	if [ -n "$LLD" ]; then
+		# clang passes the legacy -iphoneos_version_min, which this
+		# ld64.lld rejects ("must specify -platform_version"); route the
+		# link through a wrapper that translates the flag.
+		cat > "$B/ld-pv.sh" <<'EOS'
+#!/bin/bash
+args=()
+wait_version=0
+for a in "$@"; do
+	if [ "$wait_version" = 1 ]; then
+		args+=(-platform_version ios "$a" "$a")
+		wait_version=0
+		continue
+	fi
+	if [ "$a" = "-iphoneos_version_min" ] || [ "$a" = "-ios_version_min" ]; then
+		wait_version=1
+		continue
+	fi
+	args+=("$a")
+done
+exec /usr/bin/ld64.lld "${args[@]}"
+EOS
+		chmod +x "$B/ld-pv.sh"
+		LDARG="-fuse-ld=$B/ld-pv.sh"
+		echo "[*] $CC_BIN -target via Mach-O linker wrapper $LDARG"
+	else
+		echo "[!] no ld64.lld found in PATH; link-based meson checks will fail"
+	fi
 fi
+CC_ARGS="'$CC_BIN', '$C_TGT1', '$C_TGT2'"
+CXX_ARGS="'$CC_BIN++', '$C_TGT1', '$C_TGT2'"
+if [ -n "$LDARG" ]; then
+	CC_ARGS="$CC_ARGS, '$LDARG'"
+	CXX_ARGS="$CXX_ARGS, '$LDARG'"
+fi
+CC_ARGS="$CC_ARGS, '-isysroot', '$SDK'"
+CXX_ARGS="$CXX_ARGS, '-isysroot', '$SDK', '-fuse-cxa-atexit'"
 
 PATCHES=$(cat "$REPO_ROOT"/tools/mesa/*.patch | sha256sum | cut -d' ' -f1)
 if [ ! -d "mesa-$VERSION" ] || [ "$(cat "mesa-$VERSION/.curtana-patches" 2>/dev/null || true)" != "$PATCHES" ]; then
@@ -71,9 +113,9 @@ export PATH="$B/venv/bin:$PATH"
 
 cat > cross.ini <<INI
 [binaries]
-c = ['$CC_BIN', '$C_TGT1', '$C_TGT2', '-isysroot', '$SDK']
-cpp = ['$CC_BIN++', '$C_TGT1', '$C_TGT2', '-isysroot', '$SDK', '-fuse-cxa-atexit']
-objc = ['$CC_BIN', '$C_TGT1', '$C_TGT2', '-isysroot', '$SDK']
+c = [$CC_ARGS]
+cpp = [$CXX_ARGS]
+objc = [$CC_ARGS]
 ar = 'llvm-ar'
 ranlib = 'llvm-ranlib'
 strip = 'llvm-strip'
@@ -97,7 +139,7 @@ needs_exe_wrapper = true
 #  - HAVE_FUNC_ATTRIBUTE_PACKED: cross meson cannot run the attribute test;
 #    without the define the mesa_prim PACKED static asserts fail
 c_args = ['-D_DARWIN_C_SOURCE=1', '-DHAVE_STRUCT_TIMESPEC=1', '-DHAVE_FUNC_ATTRIBUTE_PACKED=1']
-cpp_args = ['-D_DARWIN_C_SOURCE=1', '-DHAVE_STRUCT_TIMESPEC=1', '-DHAVE_FUNC_ATTRIBUTE_PACKED=1']
+cpp_args = ['-D_DARWIN_C_SOURCE=1', '-DHAVE_STRUCT_TIMESPEC=1', '-DHAVE_FUNC_ATTRIBUTE_PACKED=1', '-Wno-c++11-narrowing']
 INI
 
 DRIVERS="${DRIVERS:-softpipe,freedreno}"
@@ -111,15 +153,26 @@ ninja -C "$BUILD" src/gallium/drivers/freedreno/air_run
 cp "$BUILD/src/gallium/drivers/freedreno/air_run" out/air_run
 
 llvm-strip -x -o out/libOSMesa.8.dylib "$BUILD/src/gallium/targets/osmesa/libOSMesa.8.dylib"
-install_name_tool -id /redwood/lib/libOSMesa.8.dylib out/libOSMesa.8.dylib
-nm -gU out/libOSMesa.8.dylib | awk '$3 ~ /^_gl/ { print substr($3, 2) }' > out/exported-gl.txt
+# set the install id: Apple clang has install_name_tool, otherwise LLVM's
+# standalone tool ships with the llvm package on Linux runners
+if command -v install_name_tool >/dev/null 2>&1; then
+	install_name_tool -id /redwood/lib/libOSMesa.8.dylib out/libOSMesa.8.dylib
+else
+	llvm-install-name-tool -id /redwood/lib/libOSMesa.8.dylib out/libOSMesa.8.dylib
+fi
+# -g -U = defined, global symbols (Apple nm spelling); same on llvm-nm
+if llvm-nm -g --defined-only out/libOSMesa.8.dylib >/dev/null 2>&1; then
+	llvm-nm -g --defined-only out/libOSMesa.8.dylib | awk '$3 ~ /^_gl/ { print substr($3, 2) }' > out/exported-gl.txt
+else
+	nm -gU out/libOSMesa.8.dylib | awk '$3 ~ /^_gl/ { print substr($3, 2) }' > out/exported-gl.txt
+fi
 cp "mesa-$VERSION/src/mapi/glapi/registry/gl.xml" out/gl.xml
 
 # Build EAGL bridge (libhakios.gl.dylib) and test binaries
 EAGL_DIR="$REPO_ROOT/tools/mesa/eagl"
 python3 "$EAGL_DIR/mkeagl.py" "$EAGL_DIR/eagl_slots.txt" out/gl.xml out/exported-gl.txt "$EAGL_DIR/eagl.c" > out/eagl_gen.h
 
-DYN="$CC_BIN $C_TGT1 $C_TGT2 -isysroot $SDK -O2"
+DYN="$CC_BIN $C_TGT1 $C_TGT2 $LDARG -isysroot $SDK -O2"
 $DYN -dynamiclib -install_name /redwood/lib/libhakios.gl.dylib -Iout -I"$EAGL_DIR" 	-framework CoreFoundation -framework IOKit -framework IOSurface -lobjc 	out/libOSMesa.8.dylib -o out/libhakios.gl.dylib "$EAGL_DIR/eagl.c" "$EAGL_DIR/gl_osmesa.c"
 $DYN -I"$EAGL_DIR" -framework CoreFoundation -framework IOKit out/libOSMesa.8.dylib -o out/gl_test "$EAGL_DIR/gl_test.c"
 $DYN -fobjc-arc -Wno-deprecated-declarations -framework Foundation -framework CoreGraphics 	-framework CoreImage -framework IOKit -framework Metal -framework OpenGLES 	-lMobileGestalt -o out/metal_test "$EAGL_DIR/metal_test.m"

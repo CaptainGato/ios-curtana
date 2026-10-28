@@ -1,0 +1,11 @@
+--- a/src/util/disk_cache.h
++++ b/src/util/disk_cache.h
+@@ -24,7 +24,7 @@
+ #ifndef DISK_CACHE_H
+ #define DISK_CACHE_H
+ 
+-#ifdef HAVE_DLFCN_H
++#ifdef HAVE_DLADDR
+ #include <dlfcn.h>
+ #include <stdio.h>
+ #include "util/build_id.h"
